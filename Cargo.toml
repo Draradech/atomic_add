@@ -1,0 +1,12 @@
+[package]
+name = "wgsl-atomic-add-bench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+
+[profile.release]
+lto = "thin"
+
