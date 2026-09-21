@@ -99,7 +99,7 @@ impl Default for Config {
             backend: Backend::Vulkan,
             workgroups: 4096,
             adds_per_thread: 1024,
-            samples: 3,
+            samples: 7,
         }
     }
 }
@@ -122,7 +122,7 @@ fn buffer_sizes() -> Vec<u64> {
 fn usage(program: &str) {
     eprintln!(
         "Usage: {program} [--backend vulkan|dx12] [--workgroups N] [--adds N] [--samples N]\n\
-         Defaults: --backend vulkan --workgroups 4096 --adds 1024 --samples 3"
+         Defaults: --backend vulkan --workgroups 4096 --adds 1024 --samples 7"
     );
 }
 

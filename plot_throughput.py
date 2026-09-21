@@ -96,9 +96,11 @@ def read_series(path: Path) -> tuple[list[float], list[float], dict[str, str]]:
 
 
 def series_label(metadata: dict[str, str]) -> str:
+    device = metadata["device"].removeprefix("NVIDIA ")
+    driver = metadata["driver"].removeprefix("NVIDIA ")
     return (
         f"{metadata['environment']} | {metadata['api']}\n"
-        f"{metadata['device']} | {metadata['driver']}"
+        f"{device} | {driver}"
     )
 
 

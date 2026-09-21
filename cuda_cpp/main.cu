@@ -71,7 +71,7 @@ private:
 struct Config {
     std::uint32_t workgroups = 4096;
     std::uint32_t adds_per_thread = 1024;
-    std::uint32_t samples = 3;
+    std::uint32_t samples = 7;
     std::uint32_t device = 0;
 };
 
@@ -83,7 +83,7 @@ struct Result {
 void usage(const char* program) {
     std::cerr << "Usage: " << program
               << " [--device N] [--workgroups N] [--adds N] [--samples N]\n"
-                 "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 3\n";
+                 "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 7\n";
 }
 
 std::uint32_t parse_u32(const std::string& flag, const char* value, bool allow_zero) {
