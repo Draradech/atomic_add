@@ -13,7 +13,6 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -23,10 +22,6 @@ constexpr std::uint32_t kMinBufferExponent = 18;  // 256 KiB
 constexpr std::uint32_t kMaxBufferExponent = 26;  // 64 MiB
 constexpr std::uint32_t kStepsPerOctave = 10;
 constexpr std::uint32_t kSeed = 0x12345678u;
-
-constexpr std::array<const char*, kStepsPerOctave> kStepRelations = {
-    "power_of_two", "step_1_of_10", "step_2_of_10", "step_3_of_10", "step_4_of_10",
-    "step_5_of_10", "step_6_of_10", "step_7_of_10", "step_8_of_10", "step_9_of_10"};
 
 void cuda_check(cudaError_t result, const char* expression, const char* file, int line) {
     if (result != cudaSuccess) {
@@ -73,50 +68,22 @@ private:
     std::size_t count_ = 0;
 };
 
-class Event {
-public:
-    Event() { CUDA_CHECK(cudaEventCreate(&event_)); }
-
-    ~Event() {
-        if (event_ != nullptr) {
-            cudaEventDestroy(event_);
-        }
-    }
-
-    Event(const Event&) = delete;
-    Event& operator=(const Event&) = delete;
-
-    cudaEvent_t get() const { return event_; }
-
-private:
-    cudaEvent_t event_ = nullptr;
-};
-
 struct Config {
     std::uint32_t workgroups = 4096;
     std::uint32_t adds_per_thread = 1024;
-    std::uint32_t samples = 5;
+    std::uint32_t samples = 3;
     std::uint32_t device = 0;
 };
 
-struct Case {
-    std::uint64_t buffer_size;
-    const char* relation;
-    std::uint32_t exponent;
-};
-
 struct Result {
-    Case benchmark_case;
-    double host_average;
-    double host_median;
-    double gpu_average;
-    double gpu_median;
+    std::uint64_t buffer_size;
+    double median;
 };
 
 void usage(const char* program) {
     std::cerr << "Usage: " << program
               << " [--device N] [--workgroups N] [--adds N] [--samples N]\n"
-                 "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 5\n";
+                 "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 3\n";
 }
 
 std::uint32_t parse_u32(const std::string& flag, const char* value, bool allow_zero) {
@@ -185,9 +152,9 @@ __global__ void atomic_add_kernel(std::uint32_t* counters, std::uint32_t* checks
     checksums[id] = checksum;
 }
 
-std::vector<Case> make_cases() {
-    std::vector<Case> cases;
-    cases.reserve((kMaxBufferExponent - kMinBufferExponent) * kStepsPerOctave + 1);
+std::vector<std::uint64_t> buffer_sizes() {
+    std::vector<std::uint64_t> sizes;
+    sizes.reserve((kMaxBufferExponent - kMinBufferExponent) * kStepsPerOctave + 1);
     for (std::uint32_t exponent = kMinBufferExponent; exponent < kMaxBufferExponent;
          ++exponent) {
         for (std::uint32_t step = 0; step < kStepsPerOctave; ++step) {
@@ -196,21 +163,11 @@ std::vector<Case> make_cases() {
                 static_cast<double>(step) / static_cast<double>(kStepsPerOctave);
             const auto slots = static_cast<std::uint64_t>(
                 std::llround(std::exp2(log2_bytes) / sizeof(std::uint32_t)));
-            cases.push_back(
-                {slots * sizeof(std::uint32_t), kStepRelations[step], exponent});
+            sizes.push_back(slots * sizeof(std::uint32_t));
         }
     }
-    cases.push_back(
-        {std::uint64_t{1} << kMaxBufferExponent, "power_of_two", kMaxBufferExponent});
-    return cases;
-}
-
-double average(const std::vector<double>& values) {
-    double sum = 0.0;
-    for (const double value : values) {
-        sum += value;
-    }
-    return sum / static_cast<double>(values.size());
+    sizes.push_back(std::uint64_t{1} << kMaxBufferExponent);
+    return sizes;
 }
 
 double upper_median(std::vector<double> values) {
@@ -234,21 +191,6 @@ const char* os_name() {
 #endif
 }
 
-std::string csv_field(const std::string& value) {
-    if (value.find_first_of(",\"\r\n") == std::string::npos) {
-        return value;
-    }
-    std::string escaped = "\"";
-    for (const char character : value) {
-        if (character == '"') {
-            escaped += '"';
-        }
-        escaped += character;
-    }
-    escaped += '"';
-    return escaped;
-}
-
 std::string nvidia_driver_version() {
 #if defined(_WIN32)
     FILE* pipe = _popen(
@@ -258,7 +200,7 @@ std::string nvidia_driver_version() {
         "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null", "r");
 #endif
     if (pipe == nullptr) {
-        return "unknown";
+        return {};
     }
 
     std::array<char, 128> output{};
@@ -269,13 +211,13 @@ std::string nvidia_driver_version() {
     pclose(pipe);
 #endif
     if (read_result == nullptr) {
-        return "unknown";
+        return {};
     }
 
     std::string version = output.data();
     const std::size_t end = version.find_last_not_of(" \t\r\n");
     if (end == std::string::npos) {
-        return "unknown";
+        return {};
     }
     version.erase(end + 1);
     return version;
@@ -309,12 +251,9 @@ void run(const Config& config) {
     }
     const std::uint64_t total =
         static_cast<std::uint64_t>(thread_count) * config.adds_per_thread;
-    const std::vector<Case> cases = make_cases();
-    const std::uint64_t max_counter_size =
-        std::max_element(cases.begin(), cases.end(), [](const Case& left, const Case& right) {
-            return left.buffer_size < right.buffer_size;
-        })->buffer_size;
-    const std::uint64_t minimum_slots = cases.front().buffer_size / sizeof(std::uint32_t);
+    const std::vector<std::uint64_t> sizes = buffer_sizes();
+    const std::uint64_t max_counter_size = sizes.back();
+    const std::uint64_t minimum_slots = sizes.front() / sizeof(std::uint32_t);
     if (total > minimum_slots * std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error(
             "workload can overflow individual counters at the smallest buffer size");
@@ -323,22 +262,16 @@ void run(const Config& config) {
     DeviceBuffer<std::uint32_t> counters(max_counter_size / sizeof(std::uint32_t));
     DeviceBuffer<std::uint32_t> checksums(thread_count);
     std::vector<std::uint32_t> readback(counters.count());
-    Event gpu_start;
-    Event gpu_stop;
-
     int cuda_driver_api_version = 0;
     int runtime_version = 0;
     CUDA_CHECK(cudaDriverGetVersion(&cuda_driver_api_version));
     CUDA_CHECK(cudaRuntimeGetVersion(&runtime_version));
-    const std::string driver_version = nvidia_driver_version();
+    const std::string nvidia_driver = nvidia_driver_version();
     std::cerr << "GPU: " << properties.name << " (CUDA device " << config.device << ", sm_"
               << properties.major << properties.minor << ")\n";
-    std::cerr << "OS/API: " << os_name() << " / CUDA " << cuda_version(runtime_version)
-              << "\n";
-    std::cerr << "NVIDIA driver: " << driver_version << "\n";
     std::cerr << "CUDA driver API/runtime: " << cuda_version(cuda_driver_api_version) << "/"
               << cuda_version(runtime_version) << "\n";
-    std::cerr << "Sweep: " << cases.size()
+    std::cerr << "Sweep: " << sizes.size()
               << " cases, " << config.samples
               << " samples each, 256 KiB through 64 MiB (ten log2 steps per octave), " << total
               << " atomic adds per sample\n";
@@ -352,91 +285,72 @@ void run(const Config& config) {
     CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<Result> results;
-    results.reserve(cases.size());
-    for (std::size_t case_index = 0; case_index < cases.size(); ++case_index) {
-        const Case& benchmark_case = cases[case_index];
+    results.reserve(sizes.size());
+    for (std::size_t case_index = 0; case_index < sizes.size(); ++case_index) {
+        const std::uint64_t buffer_size = sizes[case_index];
         const std::uint32_t slot_count =
-            static_cast<std::uint32_t>(benchmark_case.buffer_size / sizeof(std::uint32_t));
-        std::cerr << "[" << case_index + 1 << "/" << cases.size() << "] 2^"
-                  << benchmark_case.exponent << " B " << benchmark_case.relation << ": "
-                  << benchmark_case.buffer_size << " B (" << std::fixed << std::setprecision(6)
-                  << static_cast<double>(benchmark_case.buffer_size) / (1024.0 * 1024.0)
-                  << " MiB, " << slot_count << " u32 slots)\n";
+            static_cast<std::uint32_t>(buffer_size / sizeof(std::uint32_t));
+        std::cerr << "[" << case_index + 1 << "/" << sizes.size() << "] " << std::fixed
+                  << std::setprecision(6)
+                  << static_cast<double>(buffer_size) / (1024.0 * 1024.0) << " MiB ("
+                  << slot_count << " u32 slots)\n";
 
-        std::vector<double> host_throughputs;
-        std::vector<double> gpu_throughputs;
-        host_throughputs.reserve(config.samples);
-        gpu_throughputs.reserve(config.samples);
+        std::vector<double> throughputs;
+        throughputs.reserve(config.samples);
         for (std::uint32_t sample = 1; sample <= config.samples; ++sample) {
             // Clearing and its synchronization are deliberately outside the timed region.
-            CUDA_CHECK(cudaMemset(counters.get(), 0, benchmark_case.buffer_size));
+            CUDA_CHECK(cudaMemset(counters.get(), 0, buffer_size));
             CUDA_CHECK(cudaDeviceSynchronize());
 
-            CUDA_CHECK(cudaEventRecord(gpu_start.get()));
             const auto host_start = std::chrono::steady_clock::now();
             atomic_add_kernel<<<config.workgroups, kBlockSize>>>(
                 counters.get(), checksums.get(), config.adds_per_thread, slot_count,
                 thread_count, kSeed);
             CUDA_CHECK(cudaGetLastError());
-            CUDA_CHECK(cudaEventRecord(gpu_stop.get()));
-            CUDA_CHECK(cudaEventSynchronize(gpu_stop.get()));
+            CUDA_CHECK(cudaDeviceSynchronize());
             const double host_seconds =
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - host_start)
                     .count();
-            float gpu_milliseconds = 0.0f;
-            CUDA_CHECK(cudaEventElapsedTime(&gpu_milliseconds, gpu_start.get(), gpu_stop.get()));
-            const double gpu_seconds = static_cast<double>(gpu_milliseconds) / 1e3;
-            const double host_throughput = static_cast<double>(total) / host_seconds / 1e9;
-            const double gpu_throughput = static_cast<double>(total) / gpu_seconds / 1e9;
-            std::cerr << "         sample " << sample << "/" << config.samples << ": host "
+            const double throughput = static_cast<double>(total) / host_seconds / 1e9;
+            std::cerr << "         sample " << sample << "/" << config.samples << ": "
                       << std::fixed << std::setprecision(3) << host_seconds * 1e3 << " ms, "
-                      << host_throughput << " Gatomic/s; GPU " << gpu_milliseconds << " ms, "
-                      << gpu_throughput << " Gatomic/s\n";
-            host_throughputs.push_back(host_throughput);
-            gpu_throughputs.push_back(gpu_throughput);
+                      << throughput << " Gatomic/s\n";
+            throughputs.push_back(throughput);
         }
 
-        CUDA_CHECK(cudaMemcpy(readback.data(), counters.get(), benchmark_case.buffer_size,
+        CUDA_CHECK(cudaMemcpy(readback.data(), counters.get(), buffer_size,
                               cudaMemcpyDeviceToHost));
         std::uint64_t actual = 0;
         for (std::uint32_t slot = 0; slot < slot_count; ++slot) {
             actual += readback[slot];
         }
         if (actual != total) {
-            throw std::runtime_error("validation failed for " +
-                                     std::to_string(benchmark_case.buffer_size) +
+            throw std::runtime_error("validation failed for " + std::to_string(buffer_size) +
                                      " bytes: got sum " + std::to_string(actual) +
                                      ", expected " + std::to_string(total));
         }
 
-        const double host_average = average(host_throughputs);
-        const double host_median = upper_median(host_throughputs);
-        const double gpu_average = average(gpu_throughputs);
-        const double gpu_median = upper_median(gpu_throughputs);
-        std::cerr << "         host average " << std::fixed << std::setprecision(3)
-                  << host_average << ", median " << host_median << "; GPU average "
-                  << gpu_average << ", median " << gpu_median
+        const double median = upper_median(throughputs);
+        std::cerr << "         median " << std::fixed << std::setprecision(3) << median
                   << " Gatomic/s; validation passed\n";
-        results.push_back(
-            {benchmark_case, host_average, host_median, gpu_average, gpu_median});
+        results.push_back({buffer_size, median});
     }
 
     std::cerr << "Sweep complete; CSV follows on stdout.\n";
-    std::cout << "buffer_bytes,buffer_mib,relation,power_of_two_exponent,"
-                 "average_gatomic_per_s,median_gatomic_per_s,"
-                 "average_gpu_gatomic_per_s,median_gpu_gatomic_per_s,"
-                 "os,api,api_version,driver_version\n";
+    std::cout << "# environment=" << os_name() << '\n';
+    std::cout << "# api=CUDA " << cuda_version(runtime_version) << '\n';
+    std::cout << "# device=" << properties.name << '\n';
+    std::cout << "# driver=";
+    if (nvidia_driver.empty()) {
+        std::cout << "CUDA driver API " << cuda_version(cuda_driver_api_version);
+    } else {
+        std::cout << "NVIDIA " << nvidia_driver;
+    }
+    std::cout << '\n';
+    std::cout << "buffer_bytes,median_gatomic_per_s\n";
     for (const Result& result : results) {
-        std::cout << result.benchmark_case.buffer_size << ',' << std::fixed
-                  << std::setprecision(9)
-                  << static_cast<double>(result.benchmark_case.buffer_size) /
-                         (1024.0 * 1024.0)
-                  << ',' << result.benchmark_case.relation << ','
-                  << result.benchmark_case.exponent << ',' << std::setprecision(6)
-                  << result.host_average << ',' << result.host_median << ','
-                  << result.gpu_average << ',' << result.gpu_median << ','
-                  << csv_field(os_name()) << ",CUDA," << cuda_version(runtime_version) << ','
-                  << csv_field(driver_version) << '\n';
+        std::cout << result.buffer_size << ',' << std::fixed << std::setprecision(6)
+                  << result.median << '\n';
     }
 }
 

@@ -64,38 +64,10 @@ impl Backend {
         }
     }
 
-    fn api(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Self::Vulkan => "Vulkan",
-            Self::Dx12 => "Direct3D",
-        }
-    }
-
-    fn api_version(self, adapter: &wgpu::Adapter) -> String {
-        match self {
-            Self::Vulkan => {
-                // SAFETY: The adapter was requested from a Vulkan-only instance, and the
-                // returned guard is used only to read immutable physical-device properties.
-                let version = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }
-                    .map(|adapter| {
-                        adapter
-                            .physical_device_capabilities()
-                            .properties()
-                            .api_version
-                    })
-                    .unwrap_or_default();
-                if version == 0 {
-                    "unknown".into()
-                } else {
-                    format!(
-                        "{}.{}.{}",
-                        (version >> 22) & 0x7f,
-                        (version >> 12) & 0x3ff,
-                        version & 0xfff
-                    )
-                }
-            }
-            Self::Dx12 => "12".into(),
+            Self::Dx12 => "Direct3D 12",
         }
     }
 }
@@ -109,12 +81,8 @@ fn os_name() -> &'static str {
     }
 }
 
-fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_owned()
-    }
+fn metadata_value(value: &str) -> String {
+    value.replace(['\r', '\n'], " ")
 }
 
 #[derive(Clone, Copy)]
@@ -131,28 +99,12 @@ impl Default for Config {
             backend: Backend::Vulkan,
             workgroups: 4096,
             adds_per_thread: 1024,
-            samples: 5,
+            samples: 3,
         }
     }
 }
 
-fn step_relation(step: u32) -> &'static str {
-    match step {
-        0 => "power_of_two",
-        1 => "step_1_of_10",
-        2 => "step_2_of_10",
-        3 => "step_3_of_10",
-        4 => "step_4_of_10",
-        5 => "step_5_of_10",
-        6 => "step_6_of_10",
-        7 => "step_7_of_10",
-        8 => "step_8_of_10",
-        9 => "step_9_of_10",
-        _ => unreachable!("step must be within one octave"),
-    }
-}
-
-fn make_cases() -> Vec<(u64, &'static str, u32)> {
+fn buffer_sizes() -> Vec<u64> {
     let mut cases = Vec::with_capacity(
         ((MAX_BUFFER_EXPONENT - MIN_BUFFER_EXPONENT) * STEPS_PER_OCTAVE + 1) as usize,
     );
@@ -160,25 +112,17 @@ fn make_cases() -> Vec<(u64, &'static str, u32)> {
         for step in 0..STEPS_PER_OCTAVE {
             let log2_bytes = exponent as f64 + step as f64 / STEPS_PER_OCTAVE as f64;
             let slots = (2f64.powf(log2_bytes) / size_of::<u32>() as f64).round() as u64;
-            cases.push((
-                slots * size_of::<u32>() as u64,
-                step_relation(step),
-                exponent,
-            ));
+            cases.push(slots * size_of::<u32>() as u64);
         }
     }
-    cases.push((
-        1u64 << MAX_BUFFER_EXPONENT,
-        "power_of_two",
-        MAX_BUFFER_EXPONENT,
-    ));
+    cases.push(1u64 << MAX_BUFFER_EXPONENT);
     cases
 }
 
 fn usage(program: &str) {
     eprintln!(
         "Usage: {program} [--backend vulkan|dx12] [--workgroups N] [--adds N] [--samples N]\n\
-         Defaults: --backend vulkan --workgroups 4096 --adds 1024 --samples 5"
+         Defaults: --backend vulkan --workgroups 4096 --adds 1024 --samples 3"
     );
 }
 
@@ -241,12 +185,6 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
     let info = adapter.get_info();
-    let api_version = config.backend.api_version(&adapter);
-    let driver_version = if info.driver_info.trim().is_empty() {
-        info.driver.as_str()
-    } else {
-        info.driver_info.as_str()
-    };
     let adapter_limits = adapter.limits();
     let required_limits = wgpu::Limits {
         max_buffer_size: adapter_limits.max_buffer_size,
@@ -271,8 +209,8 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let cases = make_cases();
-    let max_counter_size = cases.iter().map(|case| case.0).max().unwrap();
+    let cases = buffer_sizes();
+    let max_counter_size = *cases.last().unwrap();
     let checksum_size = config.workgroups as u64 * WORKGROUP_SIZE * 4;
     for (name, size) in [("atomic", max_counter_size), ("checksum", checksum_size)] {
         if size > limits.max_storage_buffer_binding_size {
@@ -383,18 +321,12 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let total = config.workgroups as u64 * WORKGROUP_SIZE * config.adds_per_thread as u64;
-    let minimum_slots = cases.iter().map(|case| case.0 / 4).min().unwrap();
+    let minimum_slots = cases[0] / 4;
     if total > minimum_slots * u32::MAX as u64 {
         return Err("workload can overflow individual counters at the smallest buffer size".into());
     }
 
     eprintln!("GPU: {} ({:?})", info.name, info.backend);
-    eprintln!(
-        "OS/API: {} / {} {}",
-        os_name(),
-        config.backend.api(),
-        api_version
-    );
     eprintln!("Driver: {} {}", info.driver, info.driver_info);
     eprintln!(
         "Sweep: {} cases, {} samples each, 256 KiB through 64 MiB (ten log2 steps per octave), {} atomic adds per sample",
@@ -414,15 +346,12 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     device.poll(wgpu::PollType::wait_indefinitely())?;
 
     let mut results = Vec::with_capacity(cases.len());
-    for (index, &(buffer_size, relation, exponent)) in cases.iter().enumerate() {
+    for (index, &buffer_size) in cases.iter().enumerate() {
         let slot_count = (buffer_size / 4) as u32;
         eprintln!(
-            "[{}/{}] 2^{} B {}: {} B ({:.6} MiB, {} u32 slots)",
+            "[{}/{}] {:.6} MiB ({} u32 slots)",
             index + 1,
             cases.len(),
-            exponent,
-            relation,
-            buffer_size,
             buffer_size as f64 / (1024.0 * 1024.0),
             slot_count
         );
@@ -478,33 +407,22 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         throughputs.sort_by(f64::total_cmp);
-        let average = throughputs.iter().sum::<f64>() / throughputs.len() as f64;
         let median = throughputs[throughputs.len() / 2];
-        eprintln!(
-            "         average {:.3}, median {:.3} Gatomic/s; validation passed",
-            average, median
-        );
-        results.push((buffer_size, relation, exponent, average, median));
+        eprintln!("         median {:.3} Gatomic/s; validation passed", median);
+        results.push((buffer_size, median));
     }
 
     eprintln!("Sweep complete; CSV follows on stdout.");
+    println!("# environment={}", os_name());
+    println!("# api={}", config.backend.name());
+    println!("# device={}", metadata_value(&info.name));
     println!(
-        "buffer_bytes,buffer_mib,relation,power_of_two_exponent,average_gatomic_per_s,median_gatomic_per_s,os,api,api_version,driver_version"
+        "# driver={}",
+        metadata_value(&format!("{} {}", info.driver, info.driver_info))
     );
-    for (buffer_size, relation, exponent, average, median) in results {
-        println!(
-            "{},{:.9},{},{},{:.6},{:.6},{},{},{},{}",
-            buffer_size,
-            buffer_size as f64 / (1024.0 * 1024.0),
-            relation,
-            exponent,
-            average,
-            median,
-            csv_field(os_name()),
-            csv_field(config.backend.api()),
-            csv_field(&api_version),
-            csv_field(driver_version)
-        );
+    println!("buffer_bytes,median_gatomic_per_s");
+    for (buffer_size, median) in results {
+        println!("{},{:.6}", buffer_size, median);
     }
     Ok(())
 }

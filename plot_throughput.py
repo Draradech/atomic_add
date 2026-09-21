@@ -9,9 +9,9 @@ import sys
 from pathlib import Path
 
 
-BUFFER_COLUMN = "buffer_mib"
+BUFFER_COLUMN = "buffer_bytes"
 THROUGHPUT_COLUMN = "median_gatomic_per_s"
-METADATA_COLUMNS = ("os", "api", "api_version", "driver_version")
+METADATA_FIELDS = ("environment", "api", "device", "driver")
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,57 +50,55 @@ def discover_csv_files(script_dir: Path) -> list[Path]:
 def read_series(path: Path) -> tuple[list[float], list[float], dict[str, str]]:
     try:
         with path.open(newline="", encoding="utf-8-sig") as csv_file:
-            reader = csv.DictReader(csv_file)
+            lines = csv_file.readlines()
+            metadata = {}
+            for line in lines:
+                if not line.startswith("#"):
+                    continue
+                key, separator, value = line[1:].strip().partition("=")
+                if separator:
+                    metadata[key.strip()] = value.strip()
+
+            reader = csv.DictReader(line for line in lines if not line.startswith("#"))
             columns = set(reader.fieldnames or ())
-            required = {BUFFER_COLUMN, THROUGHPUT_COLUMN, *METADATA_COLUMNS}
+            required = {BUFFER_COLUMN, THROUGHPUT_COLUMN}
             missing = required - columns
             if missing:
                 missing_names = ", ".join(sorted(missing))
                 raise ValueError(f"missing column(s): {missing_names}")
 
             points: list[tuple[float, float]] = []
-            metadata: dict[str, str] | None = None
             for row_number, row in enumerate(reader, start=2):
                 try:
-                    buffer_mib = float(row[BUFFER_COLUMN])
+                    buffer_bytes = float(row[BUFFER_COLUMN])
                     throughput = float(row[THROUGHPUT_COLUMN])
                 except (TypeError, ValueError) as error:
                     raise ValueError(
                         f"invalid numeric value on row {row_number}"
                     ) from error
-                if buffer_mib <= 0:
+                if buffer_bytes <= 0:
                     raise ValueError(
                         f"{BUFFER_COLUMN} must be positive on row {row_number}"
                     )
-                row_metadata = {
-                    column: (row[column] or "").strip() for column in METADATA_COLUMNS
-                }
-                empty = [column for column, value in row_metadata.items() if not value]
-                if empty:
-                    raise ValueError(
-                        f"empty metadata column(s) on row {row_number}: "
-                        + ", ".join(empty)
-                    )
-                if metadata is None:
-                    metadata = row_metadata
-                elif row_metadata != metadata:
-                    raise ValueError(f"metadata changes on row {row_number}")
-                points.append((buffer_mib, throughput))
+                points.append((buffer_bytes / 1024**2, throughput))
     except OSError as error:
         raise ValueError(str(error)) from error
 
     if not points:
         raise ValueError("contains no benchmark rows")
 
+    missing_metadata = [field for field in METADATA_FIELDS if not metadata.get(field)]
+    if missing_metadata:
+        raise ValueError("missing metadata: " + ", ".join(missing_metadata))
+
     points.sort()
-    assert metadata is not None
     return [point[0] for point in points], [point[1] for point in points], metadata
 
 
 def series_label(metadata: dict[str, str]) -> str:
     return (
-        f"{metadata['os']} | {metadata['api']} {metadata['api_version']} | "
-        f"driver {metadata['driver_version']}"
+        f"{metadata['environment']} | {metadata['api']}\n"
+        f"{metadata['device']} | {metadata['driver']}"
     )
 
 
