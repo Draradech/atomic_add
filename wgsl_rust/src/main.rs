@@ -2,9 +2,9 @@ use std::time::Instant;
 use std::{num::NonZeroU64, sync::mpsc};
 
 const WORKGROUP_SIZE: u64 = 256;
-const MIN_BUFFER_EXPONENT: u32 = 12; // 4 KiB
+const MIN_BUFFER_EXPONENT: u32 = 18; // 256 KiB
 const MAX_BUFFER_EXPONENT: u32 = 26; // 64 MiB
-const STEPS_PER_OCTAVE: u32 = 5;
+const STEPS_PER_OCTAVE: u32 = 10;
 
 const SHADER: &str = r#"
 struct Params {
@@ -139,10 +139,15 @@ impl Default for Config {
 fn step_relation(step: u32) -> &'static str {
     match step {
         0 => "power_of_two",
-        1 => "step_1_of_5",
-        2 => "step_2_of_5",
-        3 => "step_3_of_5",
-        4 => "step_4_of_5",
+        1 => "step_1_of_10",
+        2 => "step_2_of_10",
+        3 => "step_3_of_10",
+        4 => "step_4_of_10",
+        5 => "step_5_of_10",
+        6 => "step_6_of_10",
+        7 => "step_7_of_10",
+        8 => "step_8_of_10",
+        9 => "step_9_of_10",
         _ => unreachable!("step must be within one octave"),
     }
 }
@@ -392,7 +397,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     );
     eprintln!("Driver: {} {}", info.driver, info.driver_info);
     eprintln!(
-        "Sweep: {} cases, {} samples each, 4 KiB through 64 MiB (five log2 steps per octave), {} atomic adds per sample",
+        "Sweep: {} cases, {} samples each, 256 KiB through 64 MiB (ten log2 steps per octave), {} atomic adds per sample",
         cases.len(),
         config.samples,
         total

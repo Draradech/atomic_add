@@ -19,13 +19,14 @@
 namespace {
 
 constexpr std::uint32_t kBlockSize = 256;
-constexpr std::uint32_t kMinBufferExponent = 12;  // 4 KiB
+constexpr std::uint32_t kMinBufferExponent = 18;  // 256 KiB
 constexpr std::uint32_t kMaxBufferExponent = 26;  // 64 MiB
-constexpr std::uint32_t kStepsPerOctave = 5;
+constexpr std::uint32_t kStepsPerOctave = 10;
 constexpr std::uint32_t kSeed = 0x12345678u;
 
 constexpr std::array<const char*, kStepsPerOctave> kStepRelations = {
-    "power_of_two", "step_1_of_5", "step_2_of_5", "step_3_of_5", "step_4_of_5"};
+    "power_of_two", "step_1_of_10", "step_2_of_10", "step_3_of_10", "step_4_of_10",
+    "step_5_of_10", "step_6_of_10", "step_7_of_10", "step_8_of_10", "step_9_of_10"};
 
 void cuda_check(cudaError_t result, const char* expression, const char* file, int line) {
     if (result != cudaSuccess) {
@@ -339,7 +340,7 @@ void run(const Config& config) {
               << cuda_version(runtime_version) << "\n";
     std::cerr << "Sweep: " << cases.size()
               << " cases, " << config.samples
-              << " samples each, 4 KiB through 64 MiB (five log2 steps per octave), " << total
+              << " samples each, 256 KiB through 64 MiB (ten log2 steps per octave), " << total
               << " atomic adds per sample\n";
 
     // Force lazy module loading/JIT compilation and warm up before collecting the sweep.

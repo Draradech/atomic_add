@@ -15,9 +15,9 @@ cargo run --release
 
 Vulkan is used by default on every platform. Select Direct3D 12 with `--backend dx12` on Windows.
 The first build downloads and compiles `wgpu`.
-The benchmark sweeps from 4 KiB through 64 MiB. Each interval between consecutive powers of two is
-split into five equal steps on a log2 scale, giving four intermediate buffer sizes per octave,
-rounded to whole `u32` elements. Each of the 71 cases runs five measured samples and is fully
+The benchmark sweeps from 256 KiB through 64 MiB. Each interval between consecutive powers of two
+is split into ten equal steps on a log2 scale, giving nine intermediate buffer sizes per octave,
+rounded to whole `u32` elements. Each of the 81 cases runs five measured samples and is fully
 validated. Options:
 
 ```text
