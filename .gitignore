@@ -4,3 +4,5 @@
 /cuda_cpp/cuda-atomic-add-bench
 *.csv
 *.log
+*.csv.hide
+/atomic-add-throughput.png
