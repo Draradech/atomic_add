@@ -14,6 +14,10 @@ cmake --build build -j
 ./build/cuda-atomic-add-bench
 ```
 
+On Windows, compare the CUDA version reported by `nvidia-smi` with `nvcc --version` before
+building. The driver must support the toolkit version. If it does not, update the NVIDIA driver
+or select an older installed toolkit with `-DCMAKE_CUDA_COMPILER=.../nvcc`.
+
 CMake targets the build machine's native GPU architecture by default. Override it when building
 for another GPU, for example with `-DCMAKE_CUDA_ARCHITECTURES=89` for Ada (`sm_89`). A direct build
 is also possible:

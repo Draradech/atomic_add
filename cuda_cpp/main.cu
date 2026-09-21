@@ -22,8 +22,19 @@ constexpr std::uint32_t kSeed = 0x12345678u;
 
 void cuda_check(cudaError_t result, const char* expression, const char* file, int line) {
     if (result != cudaSuccess) {
-        throw std::runtime_error(std::string(expression) + " failed at " + file + ":" +
-                                 std::to_string(line) + ": " + cudaGetErrorString(result));
+        const char* error_name = cudaGetErrorName(result);
+        const char* error_message = cudaGetErrorString(result);
+        if (result == cudaErrorInsufficientDriver) {
+            error_name = "cudaErrorInsufficientDriver";
+            error_message =
+                "the installed NVIDIA driver is too old for this CUDA runtime; update the "
+                "driver or rebuild with an older CUDA toolkit";
+        }
+        throw std::runtime_error(
+            std::string(expression) + " failed at " + file + ":" + std::to_string(line) +
+            ": " + (error_name != nullptr ? error_name : "unknown CUDA error") + " (" +
+            std::to_string(static_cast<int>(result)) + "): " +
+            (error_message != nullptr ? error_message : "no error description available"));
     }
 }
 
