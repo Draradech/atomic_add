@@ -1,8 +1,10 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -16,9 +18,13 @@
 namespace {
 
 constexpr std::uint32_t kBlockSize = 256;
-constexpr std::uint32_t kMinBufferExponent = 7;
-constexpr std::uint32_t kMaxBufferExponent = 27;
+constexpr std::uint32_t kMinBufferExponent = 12;  // 4 KiB
+constexpr std::uint32_t kMaxBufferExponent = 26;  // 64 MiB
+constexpr std::uint32_t kStepsPerOctave = 5;
 constexpr std::uint32_t kSeed = 0x12345678u;
+
+constexpr std::array<const char*, kStepsPerOctave> kStepRelations = {
+    "power_of_two", "step_1_of_5", "step_2_of_5", "step_3_of_5", "step_4_of_5"};
 
 void cuda_check(cudaError_t result, const char* expression, const char* file, int line) {
     if (result != cudaSuccess) {
@@ -179,17 +185,21 @@ __global__ void atomic_add_kernel(std::uint32_t* counters, std::uint32_t* checks
 
 std::vector<Case> make_cases() {
     std::vector<Case> cases;
-    cases.reserve((kMaxBufferExponent - kMinBufferExponent + 1) * 3);
-    for (std::uint32_t exponent = kMinBufferExponent; exponent <= kMaxBufferExponent;
+    cases.reserve((kMaxBufferExponent - kMinBufferExponent) * kStepsPerOctave + 1);
+    for (std::uint32_t exponent = kMinBufferExponent; exponent < kMaxBufferExponent;
          ++exponent) {
-        const std::uint64_t base = std::uint64_t{1} << exponent;
-        const std::uint64_t minus_28 = (base * 72 / 100) & ~std::uint64_t{3};
-        const std::uint64_t plus_28_unaligned = (base * 128 + 99) / 100;
-        const std::uint64_t plus_28 = (plus_28_unaligned + 3) & ~std::uint64_t{3};
-        cases.push_back({minus_28, "minus_28_percent", exponent});
-        cases.push_back({base, "power_of_two", exponent});
-        cases.push_back({plus_28, "plus_28_percent", exponent});
+        for (std::uint32_t step = 0; step < kStepsPerOctave; ++step) {
+            const double log2_bytes =
+                static_cast<double>(exponent) +
+                static_cast<double>(step) / static_cast<double>(kStepsPerOctave);
+            const auto slots = static_cast<std::uint64_t>(
+                std::llround(std::exp2(log2_bytes) / sizeof(std::uint32_t)));
+            cases.push_back(
+                {slots * sizeof(std::uint32_t), kStepRelations[step], exponent});
+        }
     }
+    cases.push_back(
+        {std::uint64_t{1} << kMaxBufferExponent, "power_of_two", kMaxBufferExponent});
     return cases;
 }
 
@@ -265,7 +275,7 @@ void run(const Config& config) {
               << cuda_version(runtime_version) << "\n";
     std::cerr << "Sweep: " << cases.size()
               << " cases, " << config.samples
-              << " samples each, 128 B through 128 MiB (+ offsets), " << total
+              << " samples each, 4 KiB through 64 MiB (five log2 steps per octave), " << total
               << " atomic adds per sample\n";
 
     // Force lazy module loading/JIT compilation and warm up before collecting the sweep.

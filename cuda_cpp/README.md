@@ -14,6 +14,16 @@ cmake --build build -j
 ./build/cuda-atomic-add-bench
 ```
 
+On Windows, the default Visual Studio generator is multi-configuration, so
+`CMAKE_BUILD_TYPE` does not select the configuration. Build and run the Release configuration
+explicitly instead:
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release -j
+.\build\Release\cuda-atomic-add-bench.exe
+```
+
 On Windows, compare the CUDA version reported by `nvidia-smi` with `nvcc --version` before
 building. The driver must support the toolkit version. If it does not, update the NVIDIA driver
 or select an older installed toolkit with `-DCMAKE_CUDA_COMPILER=.../nvcc`.
@@ -27,9 +37,10 @@ nvcc -O3 -std=c++17 -arch=native main.cu -o cuda-atomic-add-bench
 ./cuda-atomic-add-bench
 ```
 
-The benchmark sweeps powers of two from 128 bytes through `2^27` bytes (128 MiB). For every power
-of two it also measures buffers approximately 28% smaller and 28% larger, rounded to whole `u32`
-elements. Each of the 63 cases runs five measured samples and is fully validated. Options:
+The benchmark sweeps from 4 KiB through 64 MiB. Each interval between consecutive powers of two is
+split into five equal steps on a log2 scale, giving four intermediate buffer sizes per octave,
+rounded to whole `u32` elements. Each of the 71 cases runs five measured samples and is fully
+validated. Options:
 
 ```text
 --device N       zero-based CUDA device index (default: 0)

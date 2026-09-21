@@ -102,7 +102,7 @@ def main() -> int:
 
     try:
         import matplotlib.pyplot as plt
-        from matplotlib.ticker import FuncFormatter
+        from matplotlib.ticker import FuncFormatter, LogLocator
     except ImportError:
         print(
             "error: matplotlib is required; install it with "
@@ -112,12 +112,14 @@ def main() -> int:
         return 2
 
     figure, axis = plt.subplots(figsize=(12, 7))
+    all_buffer_sizes: list[float] = []
     for csv_path in csv_files:
         try:
             buffer_sizes, throughputs = read_series(csv_path)
         except ValueError as error:
             print(f"error: {csv_path}: {error}", file=sys.stderr)
             return 2
+        all_buffer_sizes.extend(buffer_sizes)
         axis.plot(
             buffer_sizes,
             throughputs,
@@ -128,7 +130,12 @@ def main() -> int:
         )
 
     axis.set_xscale("log", base=2)
+    axis.xaxis.set_major_locator(LogLocator(base=2, subs=(1.0,), numticks=100))
     axis.xaxis.set_major_formatter(FuncFormatter(format_buffer_size))
+    axis.set_xlim(min(all_buffer_sizes) * 0.95, max(all_buffer_sizes) * 1.05)
+    axis.tick_params(axis="x", labelrotation=45)
+    for label in axis.get_xticklabels():
+        label.set_horizontalalignment("right")
     axis.set_xlabel("Buffer size (log2 scale)")
     axis.set_ylabel("Median wall-clock throughput (G atomic adds/s)")
     axis.set_title(args.title)

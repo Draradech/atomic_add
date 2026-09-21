@@ -2,8 +2,9 @@ use std::time::Instant;
 use std::{num::NonZeroU64, sync::mpsc};
 
 const WORKGROUP_SIZE: u64 = 256;
-const MIN_BUFFER_EXPONENT: u32 = 7; // 128 bytes
-const MAX_BUFFER_EXPONENT: u32 = 27; // 128 MiB
+const MIN_BUFFER_EXPONENT: u32 = 12; // 4 KiB
+const MAX_BUFFER_EXPONENT: u32 = 26; // 64 MiB
+const STEPS_PER_OCTAVE: u32 = 5;
 
 const SHADER: &str = r#"
 struct Params {
@@ -81,6 +82,40 @@ impl Default for Config {
             samples: 5,
         }
     }
+}
+
+fn step_relation(step: u32) -> &'static str {
+    match step {
+        0 => "power_of_two",
+        1 => "step_1_of_5",
+        2 => "step_2_of_5",
+        3 => "step_3_of_5",
+        4 => "step_4_of_5",
+        _ => unreachable!("step must be within one octave"),
+    }
+}
+
+fn make_cases() -> Vec<(u64, &'static str, u32)> {
+    let mut cases = Vec::with_capacity(
+        ((MAX_BUFFER_EXPONENT - MIN_BUFFER_EXPONENT) * STEPS_PER_OCTAVE + 1) as usize,
+    );
+    for exponent in MIN_BUFFER_EXPONENT..MAX_BUFFER_EXPONENT {
+        for step in 0..STEPS_PER_OCTAVE {
+            let log2_bytes = exponent as f64 + step as f64 / STEPS_PER_OCTAVE as f64;
+            let slots = (2f64.powf(log2_bytes) / size_of::<u32>() as f64).round() as u64;
+            cases.push((
+                slots * size_of::<u32>() as u64,
+                step_relation(step),
+                exponent,
+            ));
+        }
+    }
+    cases.push((
+        1u64 << MAX_BUFFER_EXPONENT,
+        "power_of_two",
+        MAX_BUFFER_EXPONENT,
+    ));
+    cases
 }
 
 fn usage(program: &str) {
@@ -173,15 +208,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let mut cases = Vec::new();
-    for exponent in MIN_BUFFER_EXPONENT..=MAX_BUFFER_EXPONENT {
-        let base = 1u64 << exponent;
-        let minus_28 = (base * 72 / 100) & !3;
-        let plus_28 = (base * 128).div_ceil(100).next_multiple_of(4);
-        cases.push((minus_28, "minus_28_percent", exponent));
-        cases.push((base, "power_of_two", exponent));
-        cases.push((plus_28, "plus_28_percent", exponent));
-    }
+    let cases = make_cases();
     let max_counter_size = cases.iter().map(|case| case.0).max().unwrap();
     let checksum_size = config.workgroups as u64 * WORKGROUP_SIZE * 4;
     for (name, size) in [("atomic", max_counter_size), ("checksum", checksum_size)] {
@@ -301,7 +328,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("GPU: {} ({:?})", info.name, info.backend);
     eprintln!("Driver: {} {}", info.driver, info.driver_info);
     eprintln!(
-        "Sweep: {} cases, {} samples each, 128 B through 128 MiB (+ offsets), {} atomic adds per sample",
+        "Sweep: {} cases, {} samples each, 4 KiB through 64 MiB (five log2 steps per octave), {} atomic adds per sample",
         cases.len(),
         config.samples,
         total
