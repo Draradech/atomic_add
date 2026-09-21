@@ -50,7 +50,9 @@ validated. Options:
 ```
 
 Progress, device information, and validation status are written to stderr. Once the sweep finishes,
-stdout contains CSV, so results can be captured without progress messages:
+stdout contains CSV. Every row also records the OS, CUDA runtime API version, and NVIDIA driver
+version reported by `nvidia-smi`, so results can be captured without progress messages and remain
+self-describing. If `nvidia-smi` cannot be run, the driver version is recorded as `unknown`:
 
 ```sh
 ./build/cuda-atomic-add-bench > results.csv

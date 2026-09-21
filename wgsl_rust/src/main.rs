@@ -63,6 +63,58 @@ impl Backend {
             Self::Dx12 => wgpu::Backends::DX12,
         }
     }
+
+    fn api(self) -> &'static str {
+        match self {
+            Self::Vulkan => "Vulkan",
+            Self::Dx12 => "Direct3D",
+        }
+    }
+
+    fn api_version(self, adapter: &wgpu::Adapter) -> String {
+        match self {
+            Self::Vulkan => {
+                // SAFETY: The adapter was requested from a Vulkan-only instance, and the
+                // returned guard is used only to read immutable physical-device properties.
+                let version = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }
+                    .map(|adapter| {
+                        adapter
+                            .physical_device_capabilities()
+                            .properties()
+                            .api_version
+                    })
+                    .unwrap_or_default();
+                if version == 0 {
+                    "unknown".into()
+                } else {
+                    format!(
+                        "{}.{}.{}",
+                        (version >> 22) & 0x7f,
+                        (version >> 12) & 0x3ff,
+                        version & 0xfff
+                    )
+                }
+            }
+            Self::Dx12 => "12".into(),
+        }
+    }
+}
+
+fn os_name() -> &'static str {
+    match std::env::consts::OS {
+        "linux" => "Linux",
+        "windows" => "Windows",
+        "macos" => "macOS",
+        other => other,
+    }
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -184,6 +236,12 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
     let info = adapter.get_info();
+    let api_version = config.backend.api_version(&adapter);
+    let driver_version = if info.driver_info.trim().is_empty() {
+        info.driver.as_str()
+    } else {
+        info.driver_info.as_str()
+    };
     let adapter_limits = adapter.limits();
     let required_limits = wgpu::Limits {
         max_buffer_size: adapter_limits.max_buffer_size,
@@ -326,6 +384,12 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     eprintln!("GPU: {} ({:?})", info.name, info.backend);
+    eprintln!(
+        "OS/API: {} / {} {}",
+        os_name(),
+        config.backend.api(),
+        api_version
+    );
     eprintln!("Driver: {} {}", info.driver, info.driver_info);
     eprintln!(
         "Sweep: {} cases, {} samples each, 4 KiB through 64 MiB (five log2 steps per octave), {} atomic adds per sample",
@@ -420,17 +484,21 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Sweep complete; CSV follows on stdout.");
     println!(
-        "buffer_bytes,buffer_mib,relation,power_of_two_exponent,average_gatomic_per_s,median_gatomic_per_s"
+        "buffer_bytes,buffer_mib,relation,power_of_two_exponent,average_gatomic_per_s,median_gatomic_per_s,os,api,api_version,driver_version"
     );
     for (buffer_size, relation, exponent, average, median) in results {
         println!(
-            "{},{:.9},{},{},{:.6},{:.6}",
+            "{},{:.9},{},{},{:.6},{:.6},{},{},{},{}",
             buffer_size,
             buffer_size as f64 / (1024.0 * 1024.0),
             relation,
             exponent,
             average,
-            median
+            median,
+            csv_field(os_name()),
+            csv_field(config.backend.api()),
+            csv_field(&api_version),
+            csv_field(driver_version)
         );
     }
     Ok(())

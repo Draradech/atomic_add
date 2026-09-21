@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -220,6 +221,65 @@ std::string cuda_version(int version) {
     return std::to_string(version / 1000) + "." + std::to_string((version % 1000) / 10);
 }
 
+const char* os_name() {
+#if defined(_WIN32)
+    return "Windows";
+#elif defined(__linux__)
+    return "Linux";
+#elif defined(__APPLE__)
+    return "macOS";
+#else
+    return "unknown";
+#endif
+}
+
+std::string csv_field(const std::string& value) {
+    if (value.find_first_of(",\"\r\n") == std::string::npos) {
+        return value;
+    }
+    std::string escaped = "\"";
+    for (const char character : value) {
+        if (character == '"') {
+            escaped += '"';
+        }
+        escaped += character;
+    }
+    escaped += '"';
+    return escaped;
+}
+
+std::string nvidia_driver_version() {
+#if defined(_WIN32)
+    FILE* pipe = _popen(
+        "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>NUL", "r");
+#else
+    FILE* pipe = popen(
+        "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null", "r");
+#endif
+    if (pipe == nullptr) {
+        return "unknown";
+    }
+
+    std::array<char, 128> output{};
+    const char* read_result = std::fgets(output.data(), output.size(), pipe);
+#if defined(_WIN32)
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+    if (read_result == nullptr) {
+        return "unknown";
+    }
+
+    std::string version = output.data();
+    const std::size_t end = version.find_last_not_of(" \t\r\n");
+    if (end == std::string::npos) {
+        return "unknown";
+    }
+    version.erase(end + 1);
+    return version;
+}
+
 void run(const Config& config) {
     int device_count = 0;
     CUDA_CHECK(cudaGetDeviceCount(&device_count));
@@ -265,13 +325,17 @@ void run(const Config& config) {
     Event gpu_start;
     Event gpu_stop;
 
-    int driver_version = 0;
+    int cuda_driver_api_version = 0;
     int runtime_version = 0;
-    CUDA_CHECK(cudaDriverGetVersion(&driver_version));
+    CUDA_CHECK(cudaDriverGetVersion(&cuda_driver_api_version));
     CUDA_CHECK(cudaRuntimeGetVersion(&runtime_version));
+    const std::string driver_version = nvidia_driver_version();
     std::cerr << "GPU: " << properties.name << " (CUDA device " << config.device << ", sm_"
               << properties.major << properties.minor << ")\n";
-    std::cerr << "CUDA driver/runtime: " << cuda_version(driver_version) << "/"
+    std::cerr << "OS/API: " << os_name() << " / CUDA " << cuda_version(runtime_version)
+              << "\n";
+    std::cerr << "NVIDIA driver: " << driver_version << "\n";
+    std::cerr << "CUDA driver API/runtime: " << cuda_version(cuda_driver_api_version) << "/"
               << cuda_version(runtime_version) << "\n";
     std::cerr << "Sweep: " << cases.size()
               << " cases, " << config.samples
@@ -359,7 +423,8 @@ void run(const Config& config) {
     std::cerr << "Sweep complete; CSV follows on stdout.\n";
     std::cout << "buffer_bytes,buffer_mib,relation,power_of_two_exponent,"
                  "average_gatomic_per_s,median_gatomic_per_s,"
-                 "average_gpu_gatomic_per_s,median_gpu_gatomic_per_s\n";
+                 "average_gpu_gatomic_per_s,median_gpu_gatomic_per_s,"
+                 "os,api,api_version,driver_version\n";
     for (const Result& result : results) {
         std::cout << result.benchmark_case.buffer_size << ',' << std::fixed
                   << std::setprecision(9)
@@ -368,7 +433,9 @@ void run(const Config& config) {
                   << ',' << result.benchmark_case.relation << ','
                   << result.benchmark_case.exponent << ',' << std::setprecision(6)
                   << result.host_average << ',' << result.host_median << ','
-                  << result.gpu_average << ',' << result.gpu_median << '\n';
+                  << result.gpu_average << ',' << result.gpu_median << ','
+                  << csv_field(os_name()) << ",CUDA," << cuda_version(runtime_version) << ','
+                  << csv_field(driver_version) << '\n';
     }
 }
 

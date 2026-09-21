@@ -28,8 +28,9 @@ validated. Options:
 ```
 
 Progress and validation status are written to stderr. Once the sweep finishes, stdout contains CSV,
-with average and median throughput for each buffer size. Results can be captured without the
-progress messages:
+with average and median throughput for each buffer size. Every row also records the OS, graphics
+API and version, and driver version so result files remain self-describing. Results can be captured
+without the progress messages:
 
 ```sh
 cargo run --release > results.csv

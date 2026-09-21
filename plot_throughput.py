@@ -11,6 +11,7 @@ from pathlib import Path
 
 BUFFER_COLUMN = "buffer_mib"
 THROUGHPUT_COLUMN = "median_gatomic_per_s"
+METADATA_COLUMNS = ("os", "api", "api_version", "driver_version")
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--title",
-        default="GPU atomic-add throughput",
+        default="GPU atomic-add throughput, random access",
         help="graph title",
     )
     return parser.parse_args()
@@ -46,18 +47,19 @@ def discover_csv_files(script_dir: Path) -> list[Path]:
     return sorted(script_dir.rglob("*.csv"))
 
 
-def read_series(path: Path) -> tuple[list[float], list[float]]:
+def read_series(path: Path) -> tuple[list[float], list[float], dict[str, str]]:
     try:
         with path.open(newline="", encoding="utf-8-sig") as csv_file:
             reader = csv.DictReader(csv_file)
             columns = set(reader.fieldnames or ())
-            required = {BUFFER_COLUMN, THROUGHPUT_COLUMN}
+            required = {BUFFER_COLUMN, THROUGHPUT_COLUMN, *METADATA_COLUMNS}
             missing = required - columns
             if missing:
                 missing_names = ", ".join(sorted(missing))
                 raise ValueError(f"missing column(s): {missing_names}")
 
             points: list[tuple[float, float]] = []
+            metadata: dict[str, str] | None = None
             for row_number, row in enumerate(reader, start=2):
                 try:
                     buffer_mib = float(row[BUFFER_COLUMN])
@@ -70,6 +72,19 @@ def read_series(path: Path) -> tuple[list[float], list[float]]:
                     raise ValueError(
                         f"{BUFFER_COLUMN} must be positive on row {row_number}"
                     )
+                row_metadata = {
+                    column: (row[column] or "").strip() for column in METADATA_COLUMNS
+                }
+                empty = [column for column, value in row_metadata.items() if not value]
+                if empty:
+                    raise ValueError(
+                        f"empty metadata column(s) on row {row_number}: "
+                        + ", ".join(empty)
+                    )
+                if metadata is None:
+                    metadata = row_metadata
+                elif row_metadata != metadata:
+                    raise ValueError(f"metadata changes on row {row_number}")
                 points.append((buffer_mib, throughput))
     except OSError as error:
         raise ValueError(str(error)) from error
@@ -78,7 +93,15 @@ def read_series(path: Path) -> tuple[list[float], list[float]]:
         raise ValueError("contains no benchmark rows")
 
     points.sort()
-    return [point[0] for point in points], [point[1] for point in points]
+    assert metadata is not None
+    return [point[0] for point in points], [point[1] for point in points], metadata
+
+
+def series_label(metadata: dict[str, str]) -> str:
+    return (
+        f"{metadata['os']} | {metadata['api']} {metadata['api_version']} | "
+        f"driver {metadata['driver_version']}"
+    )
 
 
 def format_buffer_size(buffer_mib: float, _position: float) -> str:
@@ -115,7 +138,7 @@ def main() -> int:
     all_buffer_sizes: list[float] = []
     for csv_path in csv_files:
         try:
-            buffer_sizes, throughputs = read_series(csv_path)
+            buffer_sizes, throughputs, metadata = read_series(csv_path)
         except ValueError as error:
             print(f"error: {csv_path}: {error}", file=sys.stderr)
             return 2
@@ -126,7 +149,7 @@ def main() -> int:
             marker="o",
             markersize=3,
             linewidth=1.5,
-            label=csv_path.name,
+            label=series_label(metadata),
         )
 
     axis.set_xscale("log", base=2)
@@ -136,11 +159,11 @@ def main() -> int:
     axis.tick_params(axis="x", labelrotation=45)
     for label in axis.get_xticklabels():
         label.set_horizontalalignment("right")
-    axis.set_xlabel("Buffer size (log2 scale)")
+    axis.set_xlabel("Buffer size")
     axis.set_ylabel("Median wall-clock throughput (G atomic adds/s)")
     axis.set_title(args.title)
     axis.grid(True, which="both", alpha=0.25)
-    axis.legend(title="CSV file", fontsize="small", ncols=2)
+    axis.legend(fontsize="small", ncols=2)
     figure.tight_layout()
 
     try:
