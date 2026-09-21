@@ -177,13 +177,9 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     for exponent in MIN_BUFFER_EXPONENT..=MAX_BUFFER_EXPONENT {
         let base = 1u64 << exponent;
         let minus_28 = (base * 72 / 100) & !3;
-        let minus_1 = (base * 99 / 100) & !3;
-        let plus_1 = (base * 101).div_ceil(100).next_multiple_of(4);
         let plus_28 = (base * 128).div_ceil(100).next_multiple_of(4);
         cases.push((minus_28, "minus_28_percent", exponent));
-        cases.push((minus_1, "minus_1_percent", exponent));
         cases.push((base, "power_of_two", exponent));
-        cases.push((plus_1, "plus_1_percent", exponent));
         cases.push((plus_28, "plus_28_percent", exponent));
     }
     let max_counter_size = cases.iter().map(|case| case.0).max().unwrap();

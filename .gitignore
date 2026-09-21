@@ -1,1 +1,4 @@
 /target/
+/wgsl_rust/target/
+*.csv
+*.log

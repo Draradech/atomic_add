@@ -16,9 +16,8 @@ cargo run --release
 Vulkan is used by default on every platform. Select Direct3D 12 with `--backend dx12` on Windows.
 The first build downloads and compiles `wgpu`.
 The benchmark sweeps powers of two from 128 bytes through `2^27` bytes (128 MiB). For every power of
-two it also measures buffers approximately 28% smaller, 1% smaller, 1% larger, and 28% larger,
-rounded to whole `u32` elements. Each of the 105 cases runs five measured samples and is fully
-validated. Options:
+two it also measures buffers approximately 28% smaller and 28% larger, rounded to whole `u32`
+elements. Each of the 63 cases runs five measured samples and is fully validated. Options:
 
 ```text
 --backend NAME   vulkan or dx12 (default: vulkan)
