@@ -1,0 +1,39 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) buffer Counters {
+    uint counters[];
+};
+
+layout(std140, binding = 1) uniform Params {
+    uint adds_per_thread;
+    uint slot_count;
+    uint thread_count;
+    uint seed;
+} params;
+
+layout(std430, binding = 2) buffer Checksums {
+    uint checksums[];
+};
+
+uint hash_u32(uint input_value) {
+    uint value = input_value;
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    uint checksum = 0u;
+    for (uint i = 0u; i < params.adds_per_thread; ++i) {
+        uint key = id + i * params.thread_count + params.seed;
+        uint index = hash_u32(key) % params.slot_count;
+        checksum ^= atomicAdd(counters[index], 1u);
+    }
+    checksums[id] = checksum;
+}

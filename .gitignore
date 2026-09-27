@@ -1,6 +1,7 @@
 /target/
 /wgsl_rust/target/
 /cuda_cpp/build/
+/vulkan_cpp/build/
 /cuda_cpp/cuda-atomic-add-bench
 *.csv
 *.log
