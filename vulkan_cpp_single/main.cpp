@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -13,12 +12,11 @@
 
 namespace {
 
-// Change these constants to select a different workload or Vulkan device.
+// Keep the workload constants aligned with atomic_add.comp.
 constexpr std::uint32_t kDeviceIndex = 0;
 constexpr std::uint32_t kWorkgroups = 4096;
-constexpr std::uint32_t kWorkgroupSize = 256;  // Must match atomic_add.comp.
+constexpr std::uint32_t kWorkgroupSize = 256;
 constexpr std::uint32_t kAddsPerThread = 1024;
-constexpr std::uint32_t kSeed = 0x12345678u;
 constexpr VkDeviceSize kCounterBytes = VkDeviceSize{8} * 1024 * 1024;
 constexpr auto kReportInterval = std::chrono::seconds(5);
 static_assert(kWorkgroups <= std::numeric_limits<std::uint32_t>::max() / kWorkgroupSize);
@@ -31,14 +29,6 @@ void check(VkResult result, const char* operation) {
 }
 
 #define VK_CHECK(expression) check((expression), #expression)
-
-struct Params {
-    std::uint32_t adds_per_thread;
-    std::uint32_t slot_count;
-    std::uint32_t thread_count;
-    std::uint32_t seed;
-};
-static_assert(sizeof(Params) == 16);
 
 std::vector<std::uint32_t> read_shader() {
     std::ifstream file(ATOMIC_SHADER_PATH, std::ios::binary | std::ios::ate);
@@ -76,9 +66,7 @@ public:
         if (kWorkgroups > limits.maxComputeWorkGroupCount[0] ||
             kWorkgroupSize > limits.maxComputeWorkGroupSize[0] ||
             kWorkgroupSize > limits.maxComputeWorkGroupInvocations ||
-            kCounterBytes > limits.maxStorageBufferRange ||
-            checksum_bytes() > limits.maxStorageBufferRange ||
-            sizeof(Params) > limits.maxUniformBufferRange) {
+            kCounterBytes > limits.maxStorageBufferRange) {
             throw std::runtime_error("workload exceeds Vulkan device limits");
         }
 
@@ -109,33 +97,18 @@ public:
 
         make_buffer(counters_, kCounterBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        make_buffer(checksums_, checksum_bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        make_buffer(params_, sizeof(Params), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        void* mapped = nullptr;
-        VK_CHECK(vkMapMemory(device_, params_.memory, 0, sizeof(Params), 0, &mapped));
-        const Params values{kAddsPerThread, static_cast<std::uint32_t>(kCounterBytes / 4),
-                            kWorkgroups * kWorkgroupSize, kSeed};
-        std::memcpy(mapped, &values, sizeof(values));
-        vkUnmapMemory(device_, params_.memory);
 
-        const VkDescriptorSetLayoutBinding bindings[] = {
-            {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        };
+        const VkDescriptorSetLayoutBinding binding{
+            0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        layout_info.bindingCount = 3;
-        layout_info.pBindings = bindings;
+        layout_info.bindingCount = 1;
+        layout_info.pBindings = &binding;
         VK_CHECK(vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_layout_));
-        const VkDescriptorPoolSize pool_sizes[] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        };
+        const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
         VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pool_info.maxSets = 1;
-        pool_info.poolSizeCount = 2;
-        pool_info.pPoolSizes = pool_sizes;
+        pool_info.poolSizeCount = 1;
+        pool_info.pPoolSizes = &pool_size;
         VK_CHECK(vkCreateDescriptorPool(device_, &pool_info, nullptr, &descriptor_pool_));
         VkDescriptorSetAllocateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         set_info.descriptorPool = descriptor_pool_;
@@ -143,22 +116,14 @@ public:
         set_info.pSetLayouts = &descriptor_layout_;
         VK_CHECK(vkAllocateDescriptorSets(device_, &set_info, &descriptor_set_));
 
-        const VkDescriptorBufferInfo buffer_infos[] = {
-            {counters_.buffer, 0, kCounterBytes},
-            {params_.buffer, 0, sizeof(Params)},
-            {checksums_.buffer, 0, checksum_bytes()},
-        };
-        VkWriteDescriptorSet writes[3]{};
-        for (std::uint32_t i = 0; i < 3; ++i) {
-            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = descriptor_set_;
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = i == 1 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                             : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[i].pBufferInfo = &buffer_infos[i];
-        }
-        vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
+        const VkDescriptorBufferInfo buffer_info{counters_.buffer, 0, kCounterBytes};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = descriptor_set_;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &buffer_info;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 
         VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pipeline_layout_info.setLayoutCount = 1;
@@ -211,8 +176,6 @@ public:
             if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
             if (descriptor_pool_) vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
             if (descriptor_layout_) vkDestroyDescriptorSetLayout(device_, descriptor_layout_, nullptr);
-            destroy_buffer(params_);
-            destroy_buffer(checksums_);
             destroy_buffer(counters_);
             vkDestroyDevice(device_, nullptr);
         }
@@ -233,10 +196,6 @@ private:
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
     };
-
-    static constexpr VkDeviceSize checksum_bytes() {
-        return VkDeviceSize{kWorkgroups} * kWorkgroupSize * sizeof(std::uint32_t);
-    }
 
     void make_buffer(Buffer& buffer, VkDeviceSize bytes, VkBufferUsageFlags usage,
                      VkMemoryPropertyFlags memory_flags) {
@@ -275,8 +234,6 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
     Buffer counters_;
-    Buffer checksums_;
-    Buffer params_;
     VkDescriptorSetLayout descriptor_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
@@ -306,7 +263,7 @@ int main() {
             if (now - interval_start >= kReportInterval) {
                 std::cout << std::fixed << std::setprecision(3)
                           << dispatches * adds_per_dispatch / seconds / 1e9
-                          << " Gatomicadds/s" << std::endl;
+                          << " G atomic adds/s" << std::endl;
                 dispatches = 0;
                 interval_start = std::chrono::steady_clock::now();
             }

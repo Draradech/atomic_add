@@ -59,11 +59,13 @@ cmake --build vulkan_cpp/build --config Release -j
 
 ## Continuous 8 MiB Vulkan run
 
-The separate `vulkan_cpp_single` variant runs its own copy of the same compute shader on an 8 MiB counter buffer
-continuously. It reports completed atomic adds divided by elapsed wall time about every five
-seconds. It does not clear or read back buffers, validate results, or write CSV. Stop it with Ctrl-C.
-Change the device, workgroup count, and adds per thread using constants at the top of
-`vulkan_cpp_single/main.cpp`.
+The separate `vulkan_cpp_single` variant runs its own shader without the checksum path on an
+8 MiB counter buffer continuously. It reports completed atomic adds divided by elapsed wall time
+about every five seconds. It does not clear or read back buffers, validate results, or write CSV.
+Stop it with Ctrl-C.
+Change the device using the constant in `vulkan_cpp_single/main.cpp`. Keep the workload constants
+in that file and `vulkan_cpp_single/atomic_add.comp` aligned when changing workgroups, adds per
+thread, or buffer size.
 
 ```sh
 cmake -S vulkan_cpp_single -B vulkan_cpp_single/build -DCMAKE_BUILD_TYPE=Release

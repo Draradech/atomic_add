@@ -2,19 +2,13 @@
 
 layout(local_size_x = 256) in;
 
+// Keep these aligned with the workload constants in main.cpp.
+const uint ADDS_PER_THREAD = 1024u;
+const uint SLOT_COUNT = (8u * 1024u * 1024u) / 4u;
+const uint THREAD_COUNT = 4096u * 256u;
+
 layout(std430, binding = 0) buffer Counters {
     uint counters[];
-};
-
-layout(std140, binding = 1) uniform Params {
-    uint adds_per_thread;
-    uint slot_count;
-    uint thread_count;
-    uint seed;
-} params;
-
-layout(std430, binding = 2) buffer Checksums {
-    uint checksums[];
 };
 
 uint hash_u32(uint input_value) {
@@ -29,11 +23,9 @@ uint hash_u32(uint input_value) {
 
 void main() {
     uint id = gl_GlobalInvocationID.x;
-    uint checksum = 0u;
-    for (uint i = 0u; i < params.adds_per_thread; ++i) {
-        uint key = id + i * params.thread_count + params.seed;
-        uint index = hash_u32(key) % params.slot_count;
-        checksum ^= atomicAdd(counters[index], 1u);
+    for (uint i = 0u; i < ADDS_PER_THREAD; ++i) {
+        uint key = id + i * THREAD_COUNT;
+        uint index = hash_u32(key) % SLOT_COUNT;
+        atomicAdd(counters[index], 1u);
     }
-    checksums[id] = checksum;
 }
