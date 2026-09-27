@@ -43,6 +43,7 @@ struct Config {
     std::uint32_t adds_per_thread = 1024;
     std::uint32_t samples = 7;
     bool small_buffers = false;
+    bool dedicated_counter = false;
 };
 
 struct Result {
@@ -53,7 +54,7 @@ struct Result {
 void usage(const char* program) {
     std::cerr << "Usage: " << program
               << " [--device N] [--workgroups N] [--adds N] [--samples N]"
-                 " [--small-buffers]\n"
+                 " [--small-buffers] [--dedicated-counter]\n"
                  "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 7; "
                  "one 64 MiB counter buffer\n";
 }
@@ -85,6 +86,10 @@ Config parse_args(int argc, char** argv) {
         }
         if (flag == "--small-buffers") {
             config.small_buffers = true;
+            continue;
+        }
+        if (flag == "--dedicated-counter") {
+            config.dedicated_counter = true;
             continue;
         }
         if (index + 1 == argc) {
@@ -217,6 +222,11 @@ public:
         physical_ = devices[config.device];
         vkGetPhysicalDeviceProperties(physical_, &properties_);
         vkGetPhysicalDeviceMemoryProperties(physical_, &memory_properties_);
+        if (config.dedicated_counter &&
+            (app.apiVersion < VK_API_VERSION_1_1 ||
+             properties_.apiVersion < VK_API_VERSION_1_1)) {
+            throw std::runtime_error("--dedicated-counter requires Vulkan 1.1");
+        }
         if (app.apiVersion >= VK_API_VERSION_1_2 &&
             properties_.apiVersion >= VK_API_VERSION_1_2) {
             VkPhysicalDeviceDriverProperties driver{};
@@ -286,9 +296,10 @@ public:
         VK_CHECK(vkCreateDevice(physical_, &device_info, nullptr, &device_));
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
 
+        dedicated_counter_ = config.dedicated_counter;
         counter_buffer_bytes_ = config.small_buffers ? kMinCounterBytes : kMaxCounterBytes;
         counters_ = create_buffer(counter_buffer_bytes_, kCounterUsage, 0,
-                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dedicated_counter_);
         checksums_ = create_buffer(checksum_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                    0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         params_ = create_buffer(sizeof(Params), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -348,7 +359,7 @@ public:
         counters_ = {};
         counter_buffer_bytes_ = 0;
         counters_ = create_buffer(bytes, kCounterUsage, 0,
-                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dedicated_counter_);
         counter_buffer_bytes_ = bytes;
     }
 
@@ -430,7 +441,8 @@ private:
     }
 
     Buffer create_buffer(VkDeviceSize bytes, VkBufferUsageFlags usage,
-                         VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) {
+                         VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred,
+                         bool dedicated = false) {
         Buffer result;
         VkBufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -460,6 +472,12 @@ private:
         allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocation.allocationSize = requirements.size;
         allocation.memoryTypeIndex = memory_type;
+        VkMemoryDedicatedAllocateInfo dedicated_info{};
+        if (dedicated) {
+            dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+            dedicated_info.buffer = result.buffer;
+            allocation.pNext = &dedicated_info;
+        }
         VkResult status = vkAllocateMemory(device_, &allocation, nullptr, &result.memory);
         if (status != VK_SUCCESS) {
             vkDestroyBuffer(device_, result.buffer, nullptr);
@@ -591,6 +609,7 @@ private:
     std::uint32_t queue_family_ = 0;
     Buffer counters_;
     VkDeviceSize counter_buffer_bytes_ = 0;
+    bool dedicated_counter_ = false;
     Buffer checksums_;
     Buffer params_;
     Buffer readback_;
@@ -627,6 +646,9 @@ void run(const Config& config) {
               << total << " atomic adds per sample\n";
     if (config.small_buffers) {
         std::cerr << "Counter buffer: allocated separately at each sweep size\n";
+    }
+    if (config.dedicated_counter) {
+        std::cerr << "Counter memory: dedicated allocation\n";
     }
 
     const VkDeviceSize warmup_bytes = config.small_buffers ? kMinCounterBytes : kMaxCounterBytes;
@@ -681,6 +703,8 @@ void run(const Config& config) {
     std::cout << "# device=" << metadata_value(properties.deviceName) << '\n';
     std::cout << "# driver=" << metadata_value(bench.driver_name()) << '\n';
     if (config.small_buffers) std::cout << "# counter_allocation=per-step\n";
+    if (config.dedicated_counter) std::cout << "# counter_memory=dedicated\n";
+    std::cout << "# samples=" << config.samples << '\n';
     std::cout << "buffer_bytes,median_gatomic_per_s\n";
     for (const Result& result : results) {
         std::cout << result.buffer_size << ',' << std::fixed << std::setprecision(6)

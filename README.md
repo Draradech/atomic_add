@@ -18,6 +18,17 @@ WGSL through Vulkan:
 cargo run --release --manifest-path wgsl_rust/Cargo.toml > wgsl-vulkan.csv
 ```
 
+For a dedicated Vulkan allocation while keeping the WGSL shader and wgpu
+compute pipeline, add `--dedicated-counter`:
+
+```sh
+cargo run --release --manifest-path wgsl_rust/Cargo.toml -- --dedicated-counter > wgsl-vulkan-dedicated.csv
+```
+
+This opt-in path uses wgpu's unsafe Vulkan HAL interop to create, initialize,
+and import the counter buffer. It requires a Vulkan wgpu device. It is a
+platform-specific escape hatch for the Linux NVIDIA behavior described below.
+
 WGSL through Direct3D 12 (Windows only):
 
 ```sh
@@ -49,6 +60,31 @@ size; CSV output from the small-buffer mode includes
 ```sh
 ./vulkan_cpp/build/vulkan-atomic-add-bench --small-buffers > vulkan-cpp-small.csv
 ```
+
+On the tested Linux RTX 4070/NVIDIA 615.71.09 driver, `--dedicated-counter`
+recovers the fast random-atomic path. It attaches
+`VkMemoryDedicatedAllocateInfo` for the counter buffer when allocating its
+`VkDeviceMemory`. It works with either the default 64 MiB buffer or
+`--small-buffers`; the latter gives each counter buffer a dedicated allocation
+sized to its Vulkan memory requirements. The CSV includes
+`# counter_memory=dedicated`.
+
+```sh
+./vulkan_cpp/build/vulkan-atomic-add-bench --dedicated-counter > vulkan-cpp-dedicated.csv
+./vulkan_cpp/build/vulkan-atomic-add-bench --small-buffers --dedicated-counter > vulkan-cpp-small-dedicated.csv
+```
+
+At 8 MiB, the checksum-validating Linux sweep measured 29.4 Gatomic/s with a
+dedicated 64 MiB counter allocation and 25.0 Gatomic/s with an 8 MiB per-step
+dedicated allocation (three samples each), compared with 12.5 Gatomic/s in the
+earlier non-dedicated sweeps (seven samples each). The driver-level reason for
+the difference is not yet known; see `investigation.txt`.
+
+The WGSL/wgpu sweep also benefits from the dedicated counter buffer: at
+8 MiB it measured 31.3 Gatomic/s in a three-sample run and 22.1 Gatomic/s
+in a seven-sample run, versus 12.3 Gatomic/s without dedicated memory in a
+three-sample run. Its dedicated results varied more than the Vulkan C++ runs;
+both runs passed validation at every size.
 
 On Windows, the default Visual Studio generator is multi-configuration, so select Release while
 building and run the executable from its configuration directory:
@@ -121,6 +157,6 @@ rate of this complete random-access workload, not the isolated hardware atomic i
 ## Optional arguments
 
 The three sweep executables accept `--workgroups N`, `--adds N`, and `--samples N`. The WGSL version also
-accepts `--backend vulkan|dx12`; the CUDA and Vulkan C++ versions accept `--device N`. Defaults are
-encoded near the top of each source file. The Vulkan C++ version also accepts
-`--small-buffers`.
+accepts `--backend vulkan|dx12` and `--dedicated-counter`; the CUDA and Vulkan C++ versions accept `--device N`.
+Defaults are encoded near the top of each source file. The Vulkan C++ version also accepts
+`--small-buffers` and `--dedicated-counter`.

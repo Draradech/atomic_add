@@ -682,8 +682,10 @@ dependencies = [
 name = "wgsl-atomic-add-bench"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "pollster",
  "wgpu",
+ "wgpu-hal",
 ]
 
 [[package]]

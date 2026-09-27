@@ -1,6 +1,8 @@
 use std::time::Instant;
 use std::{num::NonZeroU64, sync::mpsc};
 
+mod dedicated_vulkan;
+
 const WORKGROUP_SIZE: u64 = 256;
 const MIN_BUFFER_EXPONENT: u32 = 18; // 256 KiB
 const MAX_BUFFER_EXPONENT: u32 = 26; // 64 MiB
@@ -91,6 +93,7 @@ struct Config {
     workgroups: u32,
     adds_per_thread: u32,
     samples: u32,
+    dedicated_counter: bool,
 }
 
 impl Default for Config {
@@ -100,6 +103,7 @@ impl Default for Config {
             workgroups: 4096,
             adds_per_thread: 1024,
             samples: 7,
+            dedicated_counter: false,
         }
     }
 }
@@ -121,7 +125,7 @@ fn buffer_sizes() -> Vec<u64> {
 
 fn usage(program: &str) {
     eprintln!(
-        "Usage: {program} [--backend vulkan|dx12] [--workgroups N] [--adds N] [--samples N]\n\
+        "Usage: {program} [--backend vulkan|dx12] [--workgroups N] [--adds N] [--samples N] [--dedicated-counter]\n\
          Defaults: --backend vulkan --workgroups 4096 --adds 1024 --samples 7"
     );
 }
@@ -136,6 +140,10 @@ fn parse_args() -> Result<Config, String> {
         if flag == "-h" || flag == "--help" {
             usage(&program);
             std::process::exit(0);
+        }
+        if flag == "--dedicated-counter" {
+            config.dedicated_counter = true;
+            continue;
         }
         let value = args
             .next()
@@ -156,6 +164,9 @@ fn parse_args() -> Result<Config, String> {
             "--samples" => config.samples = value,
             _ => return Err(format!("unknown option: {flag}")),
         }
+    }
+    if config.dedicated_counter && !matches!(config.backend, Backend::Vulkan) {
+        return Err("--dedicated-counter requires the Vulkan backend".into());
     }
     Ok(config)
 }
@@ -222,14 +233,19 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let counters = device.create_buffer(&wgpu::BufferDescriptor {
+    let counter_desc = wgpu::BufferDescriptor {
         label: Some("random-access atomic counters"),
         size: max_counter_size,
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
-    });
+    };
+    let counters = if config.dedicated_counter {
+        dedicated_vulkan::create_buffer(&device, &counter_desc)?
+    } else {
+        device.create_buffer(&counter_desc)
+    };
     let params = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("parameters"),
         size: 16,
@@ -420,6 +436,10 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         "# driver={}",
         metadata_value(&format!("{} {}", info.driver, info.driver_info))
     );
+    if config.dedicated_counter {
+        println!("# counter_memory=dedicated");
+    }
+    println!("# samples={}", config.samples);
     println!("buffer_bytes,median_gatomic_per_s");
     for (buffer_size, median) in results {
         println!("{},{:.6}", buffer_size, median);

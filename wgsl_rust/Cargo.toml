@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ash = "0.38"
 pollster = "0.4"
 wgpu = { version = "30", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+wgpu-hal = { version = "30", default-features = false, features = ["vulkan"] }
 
 [profile.release]
 lto = "thin"
-

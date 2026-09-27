@@ -50,7 +50,7 @@ public:
     VulkanRunner() {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
         app.pApplicationName = "vulkan-atomic-add-single";
-        app.apiVersion = VK_API_VERSION_1_0;
+        app.apiVersion = VK_API_VERSION_1_1;
         VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         instance_info.pApplicationInfo = &app;
         VK_CHECK(vkCreateInstance(&instance_info, nullptr, &instance_));
@@ -64,6 +64,9 @@ public:
 
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physical_, &properties);
+        if (properties.apiVersion < VK_API_VERSION_1_1) {
+            throw std::runtime_error("dedicated-allocation query requires Vulkan 1.1");
+        }
         std::cerr << "GPU: " << properties.deviceName << '\n';
         const auto& limits = properties.limits;
         if (kWorkgroups > limits.maxComputeWorkGroupCount[0] ||
@@ -207,8 +210,18 @@ private:
         info.usage = usage;
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VK_CHECK(vkCreateBuffer(device_, &info, nullptr, &buffer.buffer));
-        VkMemoryRequirements requirements{};
-        vkGetBufferMemoryRequirements(device_, buffer.buffer, &requirements);
+        VkBufferMemoryRequirementsInfo2 query{VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2};
+        query.buffer = buffer.buffer;
+        VkMemoryDedicatedRequirements dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
+        VkMemoryRequirements2 requirements2{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+        requirements2.pNext = &dedicated;
+        vkGetBufferMemoryRequirements2(device_, &query, &requirements2);
+        const VkMemoryRequirements& requirements = requirements2.memoryRequirements;
+        std::cout << "Counter buffer dedicated allocation: prefers="
+                  << (dedicated.prefersDedicatedAllocation == VK_TRUE ? "true" : "false")
+                  << ", requires="
+                  << (dedicated.requiresDedicatedAllocation == VK_TRUE ? "true" : "false")
+                  << std::endl;
         std::uint32_t type = memory_properties_.memoryTypeCount;
         for (std::uint32_t i = 0; i < memory_properties_.memoryTypeCount; ++i) {
             if ((requirements.memoryTypeBits & (1u << i)) &&

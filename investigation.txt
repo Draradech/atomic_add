@@ -288,3 +288,59 @@ Windows sweep with 64 MiB allocation stays near 33 Gatomic/s through about
 one, that would further support an allocation-dependent address-mapping
 or translation limit. It would still not directly measure GPU page size
 or TLB misses.
+
+Linux dedicated-allocation test (2026-09-27)
+--------------------------------------------
+On the Linux RTX 4070 with NVIDIA Vulkan driver 615.71.09, attaching
+VkMemoryDedicatedAllocateInfo with the counter VkBuffer to VkMemoryAllocateInfo
+recovers the fast path. The same 8 MiB single-variant shader, buffer,
+descriptor, dispatch, and memory type (index 1, DEVICE_LOCAL) gave these two
+five-second wall-time windows:
+
+  Allocation                                             Throughput
+  -----------------------------------------------------  -------------------
+  64 MiB, ordinary VkDeviceMemory                        10.620, 10.587
+  64 MiB, dedicated to 8 MiB VkBuffer                     28.225, 29.029
+  8 MiB, dedicated to 8 MiB VkBuffer                      29.314, 29.316
+
+The dedicated-allocation run with 64 MiB backing requested Vulkan 1.2;
+the 8 MiB dedicated run did too. The ordinary and dedicated 64 MiB runs
+used the same selected memory type. Neither changing the counter buffer's
+usage to include transfer source/destination nor selecting a host-visible,
+device-local memory type recovered the fast path: both stayed near 11
+Gatomic/s. These tests did not capture GPU timestamps or performance
+counters, so the driver-level mechanism remains unknown.
+
+The checksum-validating Vulkan C++ sweep now supports --dedicated-counter.
+The full Linux sweeps used three samples per size; all 81 cases passed sum
+validation. Representative medians in Gatomic/s:
+
+  Active range       Prior ordinary     Dedicated 64 MiB     Dedicated per-step
+  -----------------  -----------------  -------------------  ------------------
+  2 MiB              18.48              29.94                29.71
+  8 MiB              12.45              29.44                25.02
+  13.93 MiB          11.89              29.08                29.21
+  16 MiB             11.80              28.68                27.82
+  19.70 MiB          11.65              17.46                15.57
+
+The earlier ordinary sweep used seven samples per size and a different
+run, so small absolute differences may reflect clock or background-load
+variation. The recovered plateau through 16 MiB is the material result.
+The per-step dedicated allocation can be exactly 8 MiB at the 8 MiB case:
+large backing allocation is not required for this Linux workaround.
+
+wgpu 30.0.0's Vulkan buffer creation currently passes
+gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged for ordinary
+buffers. The allocator supports DedicatedBuffer, but wgpu's public
+create_buffer descriptor has no dedicated-allocation choice. wgpu 30.0.0
+has unsafe HAL interop (create_buffer_from_hal). The WGSL benchmark now has
+--dedicated-counter, which creates and initializes a VkBuffer and dedicated
+VkDeviceMemory through wgpu's Vulkan HAL handles, then imports it. The rest
+of the compute and validation path remains wgpu/WGSL. All 81 cases passed
+validation in both the three- and seven-sample dedicated runs. At 8 MiB,
+the three-sample ordinary run measured 12.25 Gatomic/s and the dedicated
+run measured 31.34 Gatomic/s. A subsequent seven-sample dedicated run
+measured 22.12 Gatomic/s at 8 MiB. The dedicated wgpu curve is less stable
+than the native Vulkan C++ dedicated curve, and its cause has not been
+isolated. It still substantially improves on the ordinary wgpu allocation
+at 8 MiB.

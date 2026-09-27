@@ -104,6 +104,10 @@ def series_label(metadata: dict[str, str]) -> str:
     )
     if allocation := metadata.get("counter_allocation"):
         label += f"\n{allocation} counter allocation"
+    if memory := metadata.get("counter_memory"):
+        label += f"\n{memory} counter memory"
+    if samples := metadata.get("samples"):
+        label += f"\n{samples} samples"
     return label
 
 
