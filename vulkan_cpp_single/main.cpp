@@ -18,8 +18,11 @@ constexpr std::uint32_t kWorkgroups = 4096;
 constexpr std::uint32_t kWorkgroupSize = 256;
 constexpr std::uint32_t kAddsPerThread = 1024;
 constexpr VkDeviceSize kCounterBytes = VkDeviceSize{8} * 1024 * 1024;
+// Match the sweep's backing allocation while keeping the active buffer at 8 MiB.
+constexpr VkDeviceSize kCounterAllocationBytes = VkDeviceSize{64} * 1024 * 1024;
 constexpr auto kReportInterval = std::chrono::seconds(5);
 static_assert(kWorkgroups <= std::numeric_limits<std::uint32_t>::max() / kWorkgroupSize);
+static_assert(kCounterAllocationBytes >= kCounterBytes);
 
 void check(VkResult result, const char* operation) {
     if (result != VK_SUCCESS) {
@@ -217,7 +220,8 @@ private:
         if (type == memory_properties_.memoryTypeCount)
             throw std::runtime_error("no compatible Vulkan memory type");
         VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        allocation.allocationSize = requirements.size;
+        allocation.allocationSize = requirements.size > kCounterAllocationBytes
+                                        ? requirements.size : kCounterAllocationBytes;
         allocation.memoryTypeIndex = type;
         VK_CHECK(vkAllocateMemory(device_, &allocation, nullptr, &buffer.memory));
         VK_CHECK(vkBindBufferMemory(device_, buffer.buffer, buffer.memory, 0));

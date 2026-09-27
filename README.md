@@ -63,6 +63,8 @@ The separate `vulkan_cpp_single` variant runs its own shader without the checksu
 8 MiB counter buffer continuously. It reports completed atomic adds divided by elapsed wall time
 about every five seconds. It does not clear or read back buffers, validate results, or write CSV.
 Stop it with Ctrl-C.
+The 8 MiB buffer uses a 64 MiB device-memory allocation; see `investigation.txt` for the
+performance measurements behind that choice.
 Change the device using the constant in `vulkan_cpp_single/main.cpp`. Keep the workload constants
 in that file and `vulkan_cpp_single/atomic_add.comp` aligned when changing workgroups, adds per
 thread, or buffer size.

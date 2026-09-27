@@ -1,0 +1,108 @@
+Atomic-add performance investigation (2026-09-27)
+
+Question
+--------
+Why does the Linux Vulkan sweep fall to about 12.5 Gatomic/s at an 8 MiB
+counter working set? The user reports that this happens even though the sweep
+uses a 64 MiB counter buffer and backing allocation. That Linux result was
+reported by the user; the measurements below were made on Windows.
+
+Windows system and workload
+---------------------------
+NVIDIA GeForce RTX 4070; the sweep reported Vulkan driver NVIDIA 616.92.
+Each dispatch performs 4096 workgroups x 256 threads x 1024 atomic adds =
+1,073,741,824 adds. At the 8 MiB case, the shader addresses 2,097,152 u32
+counter slots. All throughput values below are in Gatomic/s.
+
+Results
+-------
+The investigate-branch single variant had a clear pass and checksum path; its
+compiled shader matched the sweep shader byte for byte. Its continuous result
+included clear time, whereas the sweep timed only its compute submission.
+
+  Investigate branch, 8 MiB active range                 Throughput
+  -----------------------------------------------------  ----------
+  Sweep, 64 MiB buffer and backing allocation            31.846
+  Single, 8 MiB buffer and backing allocation            ~12.4
+  Single, 16 MiB buffer/allocation, 8 MiB active         ~12.5
+  Single, 32 MiB buffer/allocation, 8 MiB active         ~12.5
+  Single, 64 MiB buffer/allocation, 8 MiB active         ~32.9
+  Single, 8 MiB buffer, 64 MiB backing allocation         32.9-33.1
+  Sweep narrowed to 8 MiB buffer/allocation              12.048 median
+
+The normal sweep figure was one sample from `--samples 1`, with validation
+passed. For the narrowed sweep, both buffer exponents were temporarily set
+to 23, giving only the 8 MiB case. Its three samples were 11.740, 12.048,
+and 12.572; validation passed. Those temporary sweep edits were reverted.
+
+On main, the single variant is simpler: it has no clear, checksum buffer,
+uniform parameters, or readback. Its shader is different from the sweep
+shader. The two main-branch runs below used the same shader, 8 MiB VkBuffer,
+descriptor range, workgroup count, and five-second wall-time reporting loop.
+Only the VkDeviceMemory allocation size changed.
+
+  Main-branch simplified single variant                 Two report windows
+  ----------------------------------------------------  ------------------
+  8 MiB buffer and default (~8 MiB) allocation          12.414, 12.476
+  8 MiB buffer and at least 64 MiB allocation           33.334, 33.507
+
+Main-branch change
+------------------
+`vulkan_cpp_single/main.cpp` still creates an 8 MiB storage buffer and runs
+the original dispatch-only command buffer. It now requests at least 64 MiB
+for the VkDeviceMemory bound to that buffer, matching the sweep's backing
+allocation on Windows. The shader, buffer usage, descriptor range, timing,
+and lack of a clear pass are unchanged. The main-branch Release build ran
+successfully and produced the two fast report windows shown above. The
+single variant does not validate counters; these numbers measure submitted
+atomic-add work divided by elapsed wall time.
+
+deJong application observation
+------------------------------
+The user reports that C:\Development\deJong, the originating use case, remains
+fast on Windows even with a 720-pixel texture (5.93 MiB counter buffer). That
+720-pixel result was not measured in this session. Source inspection confirms
+the buffer size formula is texture_size^2 * 3 * sizeof(u32); the three u32
+counters per pixel receive three atomic adds per generated point. The shader
+also evaluates trigonometric functions and follows a chaotic trajectory,
+giving it a different address distribution from the microbenchmark's hashed
+uniform random accesses. It clears the buffer each frame and uses GPU
+timestamp queries for compute passes.
+
+deJong's perf.txt records, at texture size 1440 (23.73 MiB buffer), Windows
+Vulkan: 163.5 million points in 15.07 ms, and Linux Vulkan: 57.4 million
+points in 15.25 ms, both on an RTX 4070. Those are point counts, not atomic
+counts: multiplying by three gives approximate full-frame rates of 32.55
+and 11.29 Gatomic/s respectively. The time includes more than the atomic
+compute passes, so these are rough comparisons with the microbenchmark, but
+their scale and Windows/Linux ratio are similar.
+
+deJong creates the counter buffer through wgpu 29.0.1. In the locally installed
+wgpu-hal 29.0.1 source, Vulkan buffers use gpu-allocator-managed allocation.
+deJong requests the default device memory hints, Performance; wgpu-hal sets
+minimum general memory block sizes of 128 MiB for device-only memory and
+64 MiB for host-visible memory under that hint. Small buffers can therefore
+be suballocated from a much larger VkDeviceMemory block. This is a plausible
+reason why a 5.93 MiB wgpu buffer can be fast on Windows while a directly
+allocated 8 MiB Vulkan buffer was slow. The actual memory type, block size,
+and bind offset for deJong's buffer have not been captured, so this remains
+an inference rather than a measured explanation.
+
+Interpretation and Linux follow-up
+----------------------------------
+On this Windows machine, changing only the memory allocation size is enough
+to move the simplified single variant from ~12.5 to ~33.4 Gatomic/s. The
+earlier investigate-branch test found the same effect while keeping its
+8 MiB VkBuffer and clear pass. The mechanism is unknown. In particular, the
+Windows allocation change does not explain the user's Linux sweep result,
+where a 64 MiB allocation is already slow at the 8 MiB working set.
+
+On Linux, compare the simplified single variant with 8 and 64 MiB backing
+allocations, then compare both with the normal 64 MiB sweep at 8 MiB active.
+Capture deJong's actual VkBuffer size, VkDeviceMemory allocation size, bind
+offset, selected memory type and heap, and whether it shares a memory block.
+For all variants, record VkMemoryRequirements (size, alignment,
+memoryTypeBits), GPU/driver details, and GPU timestamps alongside CPU wall
+times. Keep the shader and workload fixed within each allocation-size
+comparison; deJong's three-channel chaotic workload is not identical to the
+microbenchmark's one-channel random workload.
