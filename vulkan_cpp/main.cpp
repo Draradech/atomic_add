@@ -22,7 +22,11 @@ constexpr std::uint32_t kMinBufferExponent = 18;
 constexpr std::uint32_t kMaxBufferExponent = 26;
 constexpr std::uint32_t kStepsPerOctave = 10;
 constexpr std::uint32_t kSeed = 0x12345678u;
+constexpr VkDeviceSize kMinCounterBytes = VkDeviceSize{1} << kMinBufferExponent;
 constexpr VkDeviceSize kMaxCounterBytes = VkDeviceSize{1} << kMaxBufferExponent;
+constexpr VkBufferUsageFlags kCounterUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
 void vk_check(VkResult result, const char* operation) {
     if (result != VK_SUCCESS) {
@@ -38,6 +42,7 @@ struct Config {
     std::uint32_t workgroups = 4096;
     std::uint32_t adds_per_thread = 1024;
     std::uint32_t samples = 7;
+    bool small_buffers = false;
 };
 
 struct Result {
@@ -47,8 +52,10 @@ struct Result {
 
 void usage(const char* program) {
     std::cerr << "Usage: " << program
-              << " [--device N] [--workgroups N] [--adds N] [--samples N]\n"
-                 "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 7\n";
+              << " [--device N] [--workgroups N] [--adds N] [--samples N]"
+                 " [--small-buffers]\n"
+                 "Defaults: --device 0 --workgroups 4096 --adds 1024 --samples 7; "
+                 "one 64 MiB counter buffer\n";
 }
 
 std::uint32_t parse_u32(const std::string& flag, const char* value, bool allow_zero) {
@@ -75,6 +82,10 @@ Config parse_args(int argc, char** argv) {
         if (flag == "-h" || flag == "--help") {
             usage(argv[0]);
             std::exit(0);
+        }
+        if (flag == "--small-buffers") {
+            config.small_buffers = true;
+            continue;
         }
         if (index + 1 == argc) {
             throw std::runtime_error("missing value after " + flag);
@@ -275,11 +286,9 @@ public:
         VK_CHECK(vkCreateDevice(physical_, &device_info, nullptr, &device_));
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
 
-        counters_ = create_buffer(kMaxCounterBytes,
-                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                  0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        counter_buffer_bytes_ = config.small_buffers ? kMinCounterBytes : kMaxCounterBytes;
+        counters_ = create_buffer(counter_buffer_bytes_, kCounterUsage, 0,
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         checksums_ = create_buffer(checksum_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                    0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         params_ = create_buffer(sizeof(Params), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -334,6 +343,15 @@ public:
         }
     }
 
+    void replace_counter_buffer(VkDeviceSize bytes) {
+        destroy_buffer(counters_);
+        counters_ = {};
+        counter_buffer_bytes_ = 0;
+        counters_ = create_buffer(bytes, kCounterUsage, 0,
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        counter_buffer_bytes_ = bytes;
+    }
+
     void set_counter_range(VkDeviceSize bytes) {
         const VkDescriptorBufferInfo info{counters_.buffer, 0, bytes};
         VkWriteDescriptorSet write{};
@@ -361,7 +379,7 @@ public:
             vkCmdBindDescriptorSets(commands_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_,
                                     0, 1, &descriptor_set_, 0, nullptr);
             vkCmdDispatch(commands_, workgroups, 1, 1);
-            buffer_barrier(counters_.buffer, kMaxCounterBytes, VK_ACCESS_SHADER_WRITE_BIT,
+            buffer_barrier(counters_.buffer, counter_buffer_bytes_, VK_ACCESS_SHADER_WRITE_BIT,
                            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_TRANSFER_BIT);
         });
@@ -572,6 +590,7 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
     std::uint32_t queue_family_ = 0;
     Buffer counters_;
+    VkDeviceSize counter_buffer_bytes_ = 0;
     Buffer checksums_;
     Buffer params_;
     Buffer readback_;
@@ -606,12 +625,16 @@ void run(const Config& config) {
     std::cerr << "Sweep: " << sizes.size() << " cases, " << config.samples
               << " samples each, 256 KiB through 64 MiB (ten log2 steps per octave), "
               << total << " atomic adds per sample\n";
+    if (config.small_buffers) {
+        std::cerr << "Counter buffer: allocated separately at each sweep size\n";
+    }
 
+    const VkDeviceSize warmup_bytes = config.small_buffers ? kMinCounterBytes : kMaxCounterBytes;
     bench.set_params(config.adds_per_thread,
-                     static_cast<std::uint32_t>(kMaxCounterBytes / sizeof(std::uint32_t)),
+                     static_cast<std::uint32_t>(warmup_bytes / sizeof(std::uint32_t)),
                      thread_count);
-    bench.set_counter_range(kMaxCounterBytes);
-    bench.clear(kMaxCounterBytes);
+    bench.set_counter_range(warmup_bytes);
+    bench.clear(warmup_bytes);
     bench.dispatch(config.workgroups);
 
     std::vector<Result> results;
@@ -623,6 +646,9 @@ void run(const Config& config) {
                   << std::setprecision(6)
                   << static_cast<double>(buffer_size) / (1024.0 * 1024.0) << " MiB ("
                   << slot_count << " u32 slots)\n";
+        if (config.small_buffers && case_index != 0) {
+            bench.replace_counter_buffer(buffer_size);
+        }
         bench.set_params(config.adds_per_thread, slot_count, thread_count);
         bench.set_counter_range(buffer_size);
         std::vector<double> throughputs;
@@ -654,6 +680,7 @@ void run(const Config& config) {
     std::cout << "# api=Vulkan " << vk_version(properties.apiVersion) << '\n';
     std::cout << "# device=" << metadata_value(properties.deviceName) << '\n';
     std::cout << "# driver=" << metadata_value(bench.driver_name()) << '\n';
+    if (config.small_buffers) std::cout << "# counter_allocation=per-step\n";
     std::cout << "buffer_bytes,median_gatomic_per_s\n";
     for (const Result& result : results) {
         std::cout << result.buffer_size << ',' << std::fixed << std::setprecision(6)

@@ -40,6 +40,16 @@ cmake --build vulkan_cpp/build -j
 ./vulkan_cpp/build/vulkan-atomic-add-bench > vulkan-cpp.csv
 ```
 
+Pass `--small-buffers` to the Vulkan C++ sweep to create a counter buffer and
+backing allocation for each sweep size. The default reuses one 64 MiB counter
+buffer and allocation for the whole sweep. Both modes clear and validate every
+size; CSV output from the small-buffer mode includes
+`# counter_allocation=per-step` so plots can distinguish the runs.
+
+```sh
+./vulkan_cpp/build/vulkan-atomic-add-bench --small-buffers > vulkan-cpp-small.csv
+```
+
 On Windows, the default Visual Studio generator is multi-configuration, so select Release while
 building and run the executable from its configuration directory:
 
@@ -112,4 +122,5 @@ rate of this complete random-access workload, not the isolated hardware atomic i
 
 The three sweep executables accept `--workgroups N`, `--adds N`, and `--samples N`. The WGSL version also
 accepts `--backend vulkan|dx12`; the CUDA and Vulkan C++ versions accept `--device N`. Defaults are
-encoded near the top of each source file.
+encoded near the top of each source file. The Vulkan C++ version also accepts
+`--small-buffers`.

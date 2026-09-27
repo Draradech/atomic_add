@@ -3,8 +3,10 @@
 /vulkan_cpp/build/
 /vulkan_cpp_single/build/
 
-/atomic-add-throughput.png
-
 *.csv
 *.log
 *.hide
+*.ngfx-gputrace
+*.png
+*.bin
+*.layout

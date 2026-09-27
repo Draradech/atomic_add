@@ -98,10 +98,13 @@ def read_series(path: Path) -> tuple[list[float], list[float], dict[str, str]]:
 def series_label(metadata: dict[str, str]) -> str:
     device = metadata["device"].removeprefix("NVIDIA ")
     driver = metadata["driver"].removeprefix("NVIDIA ")
-    return (
+    label = (
         f"{metadata['environment']} | {metadata['api']}\n"
         f"{device} | {driver}"
     )
+    if allocation := metadata.get("counter_allocation"):
+        label += f"\n{allocation} counter allocation"
+    return label
 
 
 def format_buffer_size(buffer_mib: float, _position: float) -> str:

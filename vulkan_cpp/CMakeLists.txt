@@ -14,17 +14,17 @@ if(NOT GLSLC_EXECUTABLE AND NOT GLSLANG_VALIDATOR_EXECUTABLE)
 endif()
 
 set(SHADER_BINARY "${CMAKE_CURRENT_BINARY_DIR}/atomic_add.comp.spv")
-if(GLSLC_EXECUTABLE)
+if(GLSLANG_VALIDATOR_EXECUTABLE)
     add_custom_command(
         OUTPUT "${SHADER_BINARY}"
-        COMMAND "${GLSLC_EXECUTABLE}" -o "${SHADER_BINARY}" "${CMAKE_CURRENT_SOURCE_DIR}/atomic_add.comp"
+        COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V -o "${SHADER_BINARY}" -g "${CMAKE_CURRENT_SOURCE_DIR}/atomic_add.comp"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/atomic_add.comp"
         VERBATIM
     )
 else()
     add_custom_command(
         OUTPUT "${SHADER_BINARY}"
-        COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V -o "${SHADER_BINARY}" "${CMAKE_CURRENT_SOURCE_DIR}/atomic_add.comp"
+        COMMAND "${GLSLC_EXECUTABLE}" -o "${SHADER_BINARY}" "${CMAKE_CURRENT_SOURCE_DIR}/atomic_add.comp"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/atomic_add.comp"
         VERBATIM
     )
