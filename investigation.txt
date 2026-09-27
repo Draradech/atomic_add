@@ -97,12 +97,32 @@ earlier investigate-branch test found the same effect while keeping its
 Windows allocation change does not explain the user's Linux sweep result,
 where a 64 MiB allocation is already slow at the 8 MiB working set.
 
-On Linux, compare the simplified single variant with 8 and 64 MiB backing
-allocations, then compare both with the normal 64 MiB sweep at 8 MiB active.
-Capture deJong's actual VkBuffer size, VkDeviceMemory allocation size, bind
-offset, selected memory type and heap, and whether it shares a memory block.
-For all variants, record VkMemoryRequirements (size, alignment,
-memoryTypeBits), GPU/driver details, and GPU timestamps alongside CPU wall
-times. Keep the shader and workload fixed within each allocation-size
-comparison; deJong's three-channel chaotic workload is not identical to the
-microbenchmark's one-channel random workload.
+Linux follow-up (2026-09-27)
+----------------------------
+On the RTX 4070 with Vulkan driver 615.71.09, the simplified single variant
+was built in temporary directories with only the backing allocation size
+changed. All runs used the same SPIR-V, 8 MiB VkBuffer and descriptor range,
+and the same selected memory type (index 1, heap 0). The counter buffer's
+VkMemoryRequirements were size 8,388,608 bytes, alignment 16 bytes, and
+memoryTypeBits 31. Each run was stopped after two five-second wall-time
+report windows; no GPU timestamps were captured.
+
+  Backing allocation             First window   Second window
+  -----------------------------  -------------  -------------
+  8 MiB                          11.393         11.560
+  64 MiB                         12.138         12.185
+  128 MiB                        12.206         12.284
+
+The 64 and 128 MiB allocations remain near 12 Gatomic/s on Linux. Thus, the
+large-allocation change that lifted Windows from ~12.5 to ~33.4 Gatomic/s does
+not reproduce on Linux. The smaller differences among these Linux runs may
+reflect clock or background-load variation; they do not establish a useful
+allocation-size effect. These tests did not inspect the supplied Nsight GPU
+Trace files beyond their capture metadata.
+
+Remaining work: compare GPU timestamps and performance counters across the
+Windows and Linux single-variant runs. Capture deJong's actual VkBuffer size,
+VkDeviceMemory allocation size, bind offset, selected memory type and heap,
+and whether it shares a memory block. Keep the shader and workload fixed
+within each comparison; deJong's three-channel chaotic workload is not
+identical to the microbenchmark's one-channel random workload.
