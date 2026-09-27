@@ -1,9 +1,10 @@
-/target/
 /wgsl_rust/target/
 /cuda_cpp/build/
 /vulkan_cpp/build/
-/cuda_cpp/cuda-atomic-add-bench
+/vulkan_cpp_single/build/
+
+/atomic-add-throughput.png
+
 *.csv
 *.log
-*.csv.hide
-/atomic-add-throughput.png
+*.hide

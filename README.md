@@ -6,7 +6,7 @@ It is intended as a small reproducer for comparing the workload across operating
 combinations. It is not a general benchmark suite.
 
 Each of 4096 workgroups has 256 threads. Every thread performs 1024 atomic increments at hashed
-locations in a `u32` buffer. The benchmark sweeps buffer sizes from 256 KiB to 64 MiB in ten
+locations in a `u32` buffer. The sweep variants test buffer sizes from 256 KiB to 64 MiB in ten
 logarithmic steps per octave. A warmup runs first, buffer clearing is not timed, and the final sum
 of all counters is checked after every buffer size.
 
@@ -57,6 +57,23 @@ cmake --build vulkan_cpp/build --config Release -j
 .\vulkan_cpp\build\Release\vulkan-atomic-add-bench.exe > vulkan-cpp.csv
 ```
 
+## Continuous 8 MiB Vulkan run
+
+The separate `vulkan_cpp_single` variant runs its own copy of the same compute shader on an 8 MiB counter buffer
+continuously. It reports completed atomic adds divided by elapsed wall time about every five
+seconds. It does not clear or read back buffers, validate results, or write CSV. Stop it with Ctrl-C.
+Change the device, workgroup count, and adds per thread using constants at the top of
+`vulkan_cpp_single/main.cpp`.
+
+```sh
+cmake -S vulkan_cpp_single -B vulkan_cpp_single/build -DCMAKE_BUILD_TYPE=Release
+cmake --build vulkan_cpp_single/build -j
+./vulkan_cpp_single/build/vulkan-atomic-add-single
+```
+
+On Windows, build with `--config Release` and run
+`vulkan_cpp_single\build\Release\vulkan-atomic-add-single.exe`.
+
 The installed NVIDIA driver must support the CUDA toolkit used to build the benchmark. If the
 versions reported by `nvidia-smi` and `nvcc --version` are incompatible, update the driver or select
 an older installed toolkit with `-DCMAKE_CUDA_COMPILER=path/to/nvcc`.
@@ -72,7 +89,7 @@ then two-column CSV data. This keeps each result self-describing without repeati
 API, device, and driver on every row. Close other GPU-heavy programs and use a stable power setting
 when collecting results.
 
-All versions use a CPU wall clock from command submission through GPU completion. Pipeline setup,
+All sweep versions use a CPU wall clock from command submission through GPU completion. Pipeline setup,
 warmup, buffer clearing, readback, and validation are outside the timed region.
 
 To graph every CSV in this directory (requires matplotlib):
@@ -89,6 +106,6 @@ rate of this complete random-access workload, not the isolated hardware atomic i
 
 ## Optional arguments
 
-All executables accept `--workgroups N`, `--adds N`, and `--samples N`. The WGSL version also
+The three sweep executables accept `--workgroups N`, `--adds N`, and `--samples N`. The WGSL version also
 accepts `--backend vulkan|dx12`; the CUDA and Vulkan C++ versions accept `--device N`. Defaults are
 encoded near the top of each source file.
